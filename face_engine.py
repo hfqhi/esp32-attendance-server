@@ -61,15 +61,8 @@ def decode_image(data_url_or_bytes):
 
 
 def enhance_indoor_frame(frame, source="webcam"):
-    """Luminance balancing that preserves true OV2640 colors for indoor detection."""
-    if frame is None or source != "esp32":
-        return frame
-
-    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-    l_chan, a_chan, b_chan = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=1.8, tileGridSize=(8, 8))
-    l_eq = clahe.apply(l_chan)
-    return cv2.cvtColor(cv2.merge((l_eq, a_chan, b_chan)), cv2.COLOR_LAB2BGR)
+    """Passes raw OV2640 CameraWebServer-profile frames untouched to preserve crisp contrast."""
+    return frame
 
 
 def save_reference_portrait(image_data, student_id, full_name):
