@@ -47,7 +47,7 @@ WiFiClient streamClient;
 bool sdAvailable = false;
 unsigned long lastCaptureMs = 0;
 unsigned long lastHeartbeatMs = 0;
-const unsigned long CAPTURE_INTERVAL_MS = 1300;
+const unsigned long CAPTURE_INTERVAL_MS = 1100;
 const unsigned long HEARTBEAT_INTERVAL_MS = 8000;
 
 // Motion/Presence detection buffer
@@ -103,16 +103,21 @@ String sanitizeName(const String& raw) {
 // 3. PRESENCE / MOTION GATE
 // ==========================================
 bool hasSceneChanged(camera_fb_t* fb) {
-  if (!fb || fb->len < 1024) return false;
+  if (!fb || fb->len < 512) return false;
 
   long lenDiff = abs((long)fb->len - (long)prevFrameLen);
   bool sizeChanged = (prevFrameLen == 0) || (lenDiff > (long)(prevFrameLen * 0.06));
 
   uint8_t currSample[64];
-  size_t step = (fb->len - 512) / 64;
+  size_t usable = fb->len > 512 ? fb->len - 512 : fb->len;
+  size_t step = usable / 64;
+  if (step == 0) step = 1;
+
   int diffCount = 0;
   for (int i = 0; i < 64; i++) {
-    currSample[i] = fb->buf[256 + i * step];
+    size_t idx = 256 + i * step;
+    if (idx >= fb->len) idx = fb->len - 1;
+    currSample[i] = fb->buf[idx];
     if (abs((int)currSample[i] - (int)prevSample[i]) > 18) {
       diffCount++;
     }
@@ -120,11 +125,11 @@ bool hasSceneChanged(camera_fb_t* fb) {
   }
   prevFrameLen = fb->len;
 
-  return sizeChanged || (diffCount >= 18);
+  return sizeChanged || (diffCount >= 16);
 }
 
 // ==========================================
-// 4. CAMERA (OV2640 INDOOR LOW-LIGHT TUNED) & MICROSD SETUP
+// 4. CAMERA (QVGA REAL-TIME + INDOOR TUNED) & MICROSD SETUP
 // ==========================================
 bool initCamera() {
   camera_config_t config;
@@ -147,20 +152,15 @@ bool initCamera() {
   config.pin_pwdn     = PWDN_GPIO_NUM;
   config.pin_reset    = RESET_GPIO_NUM;
 
-  // 10 MHz XCLK doubles the OV2640's max per-frame exposure time for bright indoor captures without a flashlight
+  // 10 MHz XCLK doubles max exposure time for bright indoor lighting without a flashlight
   config.xclk_freq_hz = 10000000;
   config.pixel_format = PIXFORMAT_JPEG;
 
-  if (psramFound()) {
-    config.frame_size   = FRAMESIZE_VGA;
-    config.jpeg_quality = 10;
-    config.fb_count     = 2;
-    config.grab_mode    = CAMERA_GRAB_LATEST;
-  } else {
-    config.frame_size   = FRAMESIZE_QVGA;
-    config.jpeg_quality = 12;
-    config.fb_count     = 1;
-  }
+  // QVGA (320x240) reduces frame size by ~70% for smooth real-time streaming & YuNet alignment
+  config.frame_size   = FRAMESIZE_QVGA;
+  config.jpeg_quality = 12;
+  config.fb_count     = psramFound() ? 2 : 1;
+  config.grab_mode    = psramFound() ? CAMERA_GRAB_LATEST : CAMERA_GRAB_WHEN_EMPTY;
 
   if (esp_camera_init(&config) != ESP_OK) {
     return false;
@@ -187,7 +187,6 @@ bool initCamera() {
     s->set_lenc(s, 1);                        // Lens shading correction
     s->set_dcw(s, 1);                         // Downsize EN
 
-    // Disable night-mode clock divider override and lift low-light exposure floor
     s->set_reg(s, 0x11, 0xff, 0x01);          // CLKRC: internal clock prescaler for steady indoor exposure
     s->set_reg(s, 0x0f, 0xff, 0x4b);          // COM6: enable indoor anti-banding timing
   }
@@ -196,7 +195,7 @@ bool initCamera() {
   for (int i = 0; i < 8; i++) {
     camera_fb_t* warmup = esp_camera_fb_get();
     if (warmup) esp_camera_fb_return(warmup);
-    delay(80);
+    delay(60);
   }
 
   return true;
@@ -389,6 +388,7 @@ void serviceMjpegStream() {
   if (!streamClient || !streamClient.connected()) {
     streamClient = streamServer.available();
     if (streamClient) {
+      streamClient.setNoDelay(true);
       streamClient.println("HTTP/1.1 200 OK");
       streamClient.println("Content-Type: multipart/x-mixed-replace; boundary=frame");
       streamClient.println("Access-Control-Allow-Origin: *");
@@ -403,6 +403,7 @@ void serviceMjpegStream() {
       streamClient.write(fb->buf, fb->len);
       streamClient.print("\r\n");
       esp_camera_fb_return(fb);
+      yield();
     }
   }
 }
@@ -412,8 +413,8 @@ void serviceMjpegStream() {
 // ==========================================
 void setup() {
   Serial.begin(115200);
-  delay(400);
-  Serial.println("\n=== CPE-3B Smart ESP32-CAM Node ===");
+  delay(300);
+  Serial.println("\n=== CPE-3B Smart ESP32-CAM Node (QVGA Real-Time) ===");
 
   pinMode(ONBOARD_LED_PIN, OUTPUT);
   digitalWrite(ONBOARD_LED_PIN, HIGH);
@@ -426,6 +427,7 @@ void setup() {
   sdAvailable = initMicroSD();
 
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false); // Disable Wi-Fi modem sleep for low-latency MJPEG streaming
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.printf("[WIFI] Connecting to %s", WIFI_SSID);
 
@@ -486,7 +488,7 @@ void loop() {
   http.begin(String(SERVER_BASE) + "/api/verify_frame");
   http.addHeader("Content-Type", "image/jpeg");
   http.addHeader("X-Camera-Source", "esp32");
-  http.setTimeout(3500);
+  http.setTimeout(3000);
 
   int httpCode = http.POST(fb->buf, fb->len);
   if (httpCode == 200) {
