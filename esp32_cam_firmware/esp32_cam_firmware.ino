@@ -18,7 +18,8 @@ Preferences prefs;
 String wifiSsid     = "";
 String wifiPassword = "";
 String serverBase   = "http://192.168.1.100:5000";
-bool apFallbackMode = false;
+bool serverLinked   = false;
+bool setupApRunning = false;
 
 // Philippine Standard Time (UTC+8)
 const char* NTP_SERVER    = "pool.ntp.org";
@@ -42,6 +43,7 @@ const int   DAYLIGHT_OFF  = 0;
 #define VSYNC_GPIO_NUM    25
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
+#define FLASH_LED_PIN      4
 #define ONBOARD_LED_PIN   33
 
 WebServer camHttpServer(80);
@@ -52,7 +54,7 @@ bool sdAvailable = false;
 unsigned long lastCaptureMs = 0;
 unsigned long lastHeartbeatMs = 0;
 const unsigned long CAPTURE_INTERVAL_MS = 1000;
-const unsigned long HEARTBEAT_INTERVAL_MS = 8000;
+const unsigned long HEARTBEAT_INTERVAL_MS = 6000;
 
 uint8_t prevSample[64] = {0};
 size_t prevFrameLen = 0;
@@ -69,6 +71,11 @@ struct TimeStamps {
 // ==========================================
 // 2. NVS STORAGE & CAPTIVE PORTAL HELPERS
 // ==========================================
+void ensureFlashLedOff() {
+  pinMode(FLASH_LED_PIN, OUTPUT);
+  digitalWrite(FLASH_LED_PIN, LOW);
+}
+
 void loadNetworkConfig() {
   prefs.begin("essee_cfg", true);
   wifiSsid     = prefs.getString("ssid", "");
@@ -95,7 +102,51 @@ void saveNetworkConfig(const String& newSsid, const String& newPass, const Strin
   prefs.end();
 }
 
+void startSetupApIfNeeded() {
+  if (setupApRunning) return;
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP("ES-SEE-CAM-Setup");
+  setupApRunning = true;
+  Serial.println("[SETUP AP] Active: Connect to 'ES-SEE-CAM-Setup' and open http://192.168.4.1");
+}
+
+void stopSetupApIfLinked() {
+  if (!setupApRunning) return;
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
+  setupApRunning = false;
+  Serial.println("[SETUP AP] Server verified — closed setup hotspot.");
+}
+
+void handleScanWifi() {
+  camHttpServer.sendHeader("Access-Control-Allow-Origin", "*");
+  int n = WiFi.scanNetworks(false, false);
+  JsonDocument doc;
+  JsonArray arr = doc["networks"].to<JsonArray>();
+
+  for (int i = 0; i < n; i++) {
+    String s = WiFi.SSID(i);
+    if (s.length() == 0) continue;
+    JsonObject obj = arr.add<JsonObject>();
+    obj["ssid"] = s;
+    obj["rssi"] = WiFi.RSSI(i);
+    obj["open"] = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN);
+  }
+  WiFi.scanDelete();
+
+  String out;
+  serializeJson(doc, out);
+  camHttpServer.send(200, "application/json", out);
+}
+
 void handlePortalPage() {
+  String staStatus = (WiFi.status() == WL_CONNECTED)
+    ? ("Connected to <b>" + WiFi.SSID() + "</b> (" + WiFi.localIP().toString() + ")")
+    : "Not connected to router yet";
+  String srvStatus = serverLinked
+    ? ("Linked to Server (" + serverBase + ")")
+    : ("Waiting for Server at " + serverBase);
+
   String html = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -103,29 +154,62 @@ void handlePortalPage() {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ES-SEE Camera Wi-Fi Setup</title>
   <style>
-    body { font-family: system-ui, sans-serif; background: #080c14; color: #f1f5f9; display: flex; justify-content: center; padding: 24px; }
-    .card { background: #0d1424; border: 1px solid #1e293b; border-radius: 14px; padding: 22px; width: 100%; max-width: 380px; }
+    body { font-family: system-ui, sans-serif; background: #080c14; color: #f1f5f9; display: flex; justify-content: center; padding: 18px; margin: 0; }
+    .card { background: #0d1424; border: 1px solid #1e293b; border-radius: 14px; padding: 20px; width: 100%; max-width: 400px; }
     h2 { margin: 0 0 6px; font-size: 18px; color: #38bdf8; }
-    p { margin: 0 0 16px; font-size: 12px; color: #94a3b8; }
+    .status { background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 10px; font-size: 12px; color: #cbd5e1; margin-bottom: 14px; line-height: 1.5; }
     label { display: block; font-size: 12px; margin-bottom: 4px; color: #cbd5e1; }
-    input { width: 100%; box-sizing: border-box; padding: 10px; margin-bottom: 12px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #fff; font-size: 14px; }
-    button { width: 100%; padding: 11px; border: none; border-radius: 8px; background: #0284c7; color: #fff; font-weight: 700; font-size: 14px; cursor: pointer; }
+    input, select { width: 100%; box-sizing: border-box; padding: 10px; margin-bottom: 12px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #fff; font-size: 14px; }
+    .row { display: flex; gap: 8px; margin-bottom: 12px; }
+    .btn-sec { padding: 10px 12px; border: 1px solid #334155; border-radius: 8px; background: #1e293b; color: #38bdf8; font-weight: 600; font-size: 12px; cursor: pointer; white-space: nowrap; }
+    .btn-pri { width: 100%; padding: 12px; border: none; border-radius: 8px; background: #0284c7; color: #fff; font-weight: 700; font-size: 14px; cursor: pointer; }
+    .hint { font-size: 11px; color: #94a3b8; margin-top: 10px; line-height: 1.4; }
   </style>
 </head>
 <body>
   <div class="card">
     <h2>ES-SEE Camera Wi-Fi Setup</h2>
-    <p>Configure classroom Wi-Fi and Attendance Server IP.</p>
+    <div class="status">
+      <div>Wi-Fi: )rawliteral" + staStatus + R"rawliteral(</div>
+      <div>Server: )rawliteral" + srvStatus + R"rawliteral(</div>
+    </div>
     <form action="/save_wifi" method="POST">
-      <label>Wi-Fi Network Name (SSID)</label>
-      <input type="text" name="ssid" value=")rawliteral" + wifiSsid + R"rawliteral(" required>
+      <label>2.4 GHz Wi-Fi Network (SSID)</label>
+      <div class="row">
+        <select id="ssidSelect" onchange="document.getElementById('ssidInput').value=this.value" style="margin-bottom:0">
+          <option value="">-- Tap Scan 2.4G Wi-Fi --</option>
+        </select>
+        <button type="button" class="btn-sec" onclick="scanNetworks()">Scan</button>
+      </div>
+      <input id="ssidInput" type="text" name="ssid" value=")rawliteral" + wifiSsid + R"rawliteral(" placeholder="Or type exact 2.4 GHz SSID" required>
       <label>Wi-Fi Password</label>
       <input type="password" name="pass" placeholder="Enter Wi-Fi password">
-      <label>Server URL (Laptop IP)</label>
-      <input type="text" name="server" value=")rawliteral" + serverBase + R"rawliteral(" required>
-      <button type="submit">Save & Connect</button>
+      <label>Laptop Server URL (Check Dashboard Top Bar)</label>
+      <input type="text" name="server" value=")rawliteral" + serverBase + R"rawliteral(" placeholder="http://192.168.1.x:5000" required>
+      <button type="submit" class="btn-pri">Save & Connect</button>
     </form>
+    <p class="hint">Note: ESP32-CAM only supports <b>2.4 GHz</b> Wi-Fi. Make sure your laptop and ESP32-CAM are on the same router/hotspot.</p>
   </div>
+  <script>
+    async function scanNetworks() {
+      const sel = document.getElementById('ssidSelect');
+      sel.innerHTML = '<option value="">Scanning...</option>';
+      try {
+        const res = await fetch('/scan_wifi');
+        const data = await res.json();
+        sel.innerHTML = '<option value="">-- Select Network --</option>';
+        (data.networks || []).forEach(n => {
+          const opt = document.createElement('option');
+          opt.value = n.ssid;
+          opt.textContent = `${n.ssid} (${n.rssi} dBm)`;
+          sel.appendChild(opt);
+        });
+      } catch (e) {
+        sel.innerHTML = '<option value="">Scan failed — type SSID below</option>';
+      }
+    }
+    scanNetworks();
+  </script>
 </body>
 </html>
 )rawliteral";
@@ -137,8 +221,8 @@ void handlePortalSave() {
   String newPass = camHttpServer.arg("pass");
   String newServer = camHttpServer.arg("server");
   saveNetworkConfig(newSsid, newPass, newServer);
-  camHttpServer.send(200, "text/html", "<body style='background:#080c14;color:#34d399;font-family:sans-serif;text-align:center;padding:40px'><h3>Saved! Restarting ESP32-CAM...</h3></body>");
-  delay(1200);
+  camHttpServer.send(200, "text/html", "<body style='background:#080c14;color:#34d399;font-family:sans-serif;text-align:center;padding:40px'><h3>Saved! Connecting ESP32-CAM...</h3><p style='color:#94a3b8;font-size:13px'>If it fails to connect, ES-SEE-CAM-Setup will remain open at 192.168.4.1</p></body>");
+  delay(1000);
   ESP.restart();
 }
 
@@ -167,7 +251,7 @@ void handleApiWifiConfig() {
   }
 
   saveNetworkConfig(newSsid, newPass, newServer);
-  camHttpServer.send(200, "application/json", "{\"success\":true,\"message\":\"Wi-Fi credentials saved. Reconnecting ESP32-CAM...\"}");
+  camHttpServer.send(200, "application/json", "{\"success\":true,\"message\":\"Saved! ESP32-CAM is reconnecting...\"}");
   delay(800);
   ESP.restart();
 }
@@ -245,49 +329,77 @@ bool hasSignificantMotion(camera_fb_t* fb) {
 }
 
 // ==========================================
-// 5. CAMERA (HIGH-FPS VGA + CAMERAWEBSERVER BRIGHTNESS) & SD DATABASE
+// 5. CAMERA (NO FB-OVF + CAMERAWEBSERVER BRIGHTNESS) & SD DATABASE
 // ==========================================
-bool initCamera() {
-  camera_config_t config;
-  config.ledc_channel = LEDC_CHANNEL_0;
-  config.ledc_timer   = LEDC_TIMER_0;
-  config.pin_d0       = Y2_GPIO_NUM;
-  config.pin_d1       = Y3_GPIO_NUM;
-  config.pin_d2       = Y4_GPIO_NUM;
-  config.pin_d3       = Y5_GPIO_NUM;
-  config.pin_d4       = Y6_GPIO_NUM;
-  config.pin_d5       = Y7_GPIO_NUM;
-  config.pin_d6       = Y8_GPIO_NUM;
-  config.pin_d7       = Y9_GPIO_NUM;
-  config.pin_xclk     = XCLK_GPIO_NUM;
-  config.pin_pclk     = PCLK_GPIO_NUM;
-  config.pin_vsync    = VSYNC_GPIO_NUM;
-  config.pin_href     = HREF_GPIO_NUM;
-  config.pin_sccb_sda = SIOD_GPIO_NUM;
-  config.pin_sccb_scl = SIOC_GPIO_NUM;
-  config.pin_pwdn     = PWDN_GPIO_NUM;
-  config.pin_reset    = RESET_GPIO_NUM;
+camera_fb_t* grabFreshFrame() {
+  camera_fb_t* stale = esp_camera_fb_get();
+  if (stale) {
+    esp_camera_fb_return(stale);
+  }
+  return esp_camera_fb_get();
+}
 
-  config.xclk_freq_hz = 20000000;
-  config.pixel_format = PIXFORMAT_JPEG;
+bool initCamera() {
+  ensureFlashLedOff();
+
+  pinMode(PWDN_GPIO_NUM, OUTPUT);
+  digitalWrite(PWDN_GPIO_NUM, HIGH);
+  delay(120);
+  digitalWrite(PWDN_GPIO_NUM, LOW);
+  delay(120);
+
+  camera_config_t config = {};
+  config.ledc_channel  = LEDC_CHANNEL_0;
+  config.ledc_timer    = LEDC_TIMER_0;
+  config.pin_d0        = Y2_GPIO_NUM;
+  config.pin_d1        = Y3_GPIO_NUM;
+  config.pin_d2        = Y4_GPIO_NUM;
+  config.pin_d3        = Y5_GPIO_NUM;
+  config.pin_d4        = Y6_GPIO_NUM;
+  config.pin_d5        = Y7_GPIO_NUM;
+  config.pin_d6        = Y8_GPIO_NUM;
+  config.pin_d7        = Y9_GPIO_NUM;
+  config.pin_xclk      = XCLK_GPIO_NUM;
+  config.pin_pclk      = PCLK_GPIO_NUM;
+  config.pin_vsync     = VSYNC_GPIO_NUM;
+  config.pin_href      = HREF_GPIO_NUM;
+  config.pin_sccb_sda  = SIOD_GPIO_NUM;
+  config.pin_sccb_scl  = SIOC_GPIO_NUM;
+  config.pin_pwdn      = PWDN_GPIO_NUM;
+  config.pin_reset     = RESET_GPIO_NUM;
+  config.sccb_i2c_port = 0;
+
+  config.xclk_freq_hz  = 16000000;
+  config.pixel_format  = PIXFORMAT_JPEG;
+  config.grab_mode     = CAMERA_GRAB_WHEN_EMPTY;
 
   if (psramFound()) {
     config.frame_size   = FRAMESIZE_VGA;
-    config.jpeg_quality = 10;
+    config.jpeg_quality = 12;
     config.fb_count     = 2;
-    config.grab_mode    = CAMERA_GRAB_LATEST;
+    config.fb_location  = CAMERA_FB_IN_PSRAM;
   } else {
     config.frame_size   = FRAMESIZE_CIF;
     config.jpeg_quality = 12;
     config.fb_count     = 1;
-    config.grab_mode    = CAMERA_GRAB_WHEN_EMPTY;
+    config.fb_location  = CAMERA_FB_IN_DRAM;
   }
 
-  if (esp_camera_init(&config) != ESP_OK) {
+  esp_err_t err = esp_camera_init(&config);
+  if (err != ESP_OK && psramFound()) {
+    Serial.printf("[CAM] PSRAM init returned 0x%x, retrying in DRAM...\n", err);
+    config.frame_size   = FRAMESIZE_CIF;
+    config.jpeg_quality = 12;
+    config.fb_count     = 1;
+    config.fb_location  = CAMERA_FB_IN_DRAM;
+    err = esp_camera_init(&config);
+  }
+
+  if (err != ESP_OK) {
+    Serial.printf("[CAM] Init error 0x%x\n", err);
     return false;
   }
 
-  // Match Espressif CameraWebServer exposure (aec2=0 prevents indoor spot-dimming)
   sensor_t* s = esp_camera_sensor_get();
   if (s != nullptr) {
     s->set_brightness(s, 0);
@@ -314,7 +426,6 @@ bool initCamera() {
     s->set_colorbar(s, 0);
   }
 
-  // Let Auto-Exposure and Auto-White-Balance converge cleanly
   for (int i = 0; i < 15; i++) {
     camera_fb_t* warmup = esp_camera_fb_get();
     if (warmup) esp_camera_fb_return(warmup);
@@ -325,10 +436,14 @@ bool initCamera() {
 }
 
 bool initMicroSD() {
+  // 1-bit SD mode frees GPIO 4, then immediately drive GPIO 4 LOW to extinguish Flash LED
   if (!SD_MMC.begin("/sdcard", true)) {
-    Serial.println("[SD] Mount failed. Verify FAT32 format.");
+    ensureFlashLedOff();
+    Serial.println("[SD] Mount failed or no SD card inserted.");
     return false;
   }
+  ensureFlashLedOff();
+
   if (SD_MMC.cardType() == CARD_NONE) return false;
 
   ensureDir("/enrolled_faces");
@@ -416,16 +531,30 @@ void bufferFrameSilentlyWhenOffline(camera_fb_t* fb, const TimeStamps& ts) {
 // ==========================================
 // 6. SERVER SYNC: REGISTER IP, PORTRAITS & OFFLINE BUFFER
 // ==========================================
-void sendHeartbeatToServer() {
-  if (WiFi.status() != WL_CONNECTED) return;
+bool sendHeartbeatToServer() {
+  if (WiFi.status() != WL_CONNECTED) return false;
   HTTPClient http;
   http.begin(serverBase + "/api/esp32/register");
   http.addHeader("Content-Type", "application/json");
   http.setTimeout(2500);
 
   String body = "{\"ip\":\"" + WiFi.localIP().toString() + "\",\"ssid\":\"" + WiFi.SSID() + "\",\"server_url\":\"" + serverBase + "\"}";
-  http.POST(body);
+  int code = http.POST(body);
   http.end();
+
+  if (code == 200) {
+    if (!serverLinked) {
+      Serial.printf("[SYNC] Linked to server at %s\n", serverBase.c_str());
+    }
+    serverLinked = true;
+    stopSetupApIfLinked();
+    return true;
+  } else {
+    Serial.printf("[SYNC] Server unreachable (%s) -> HTTP %d\n", serverBase.c_str(), code);
+    serverLinked = false;
+    startSetupApIfNeeded();
+    return false;
+  }
 }
 
 void syncEnrolledPortraitsFromServer() {
@@ -520,7 +649,7 @@ void syncOfflineBufferToServer() {
 // 7. WEB DASHBOARD HIGH-FPS CAMERA STREAMING ENDPOINTS
 // ==========================================
 void handleSingleCapture() {
-  camera_fb_t* fb = esp_camera_fb_get();
+  camera_fb_t* fb = grabFreshFrame();
   if (!fb) {
     camHttpServer.send(503, "text/plain", "Camera capture failed");
     return;
@@ -562,6 +691,7 @@ void setup() {
   delay(250);
   Serial.println("\n=== ES-SEE Attendance Camera Node ===");
 
+  ensureFlashLedOff();
   pinMode(ONBOARD_LED_PIN, OUTPUT);
   digitalWrite(ONBOARD_LED_PIN, HIGH);
 
@@ -573,13 +703,15 @@ void setup() {
   }
 
   sdAvailable = initMicroSD();
+  ensureFlashLedOff();
 
-  bool connected = false;
+  // Keep setup AP active alongside STA until server registration succeeds
+  startSetupApIfNeeded();
+
   if (wifiSsid.length() > 0) {
-    WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);
     WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
-    Serial.printf("[WIFI] Connecting to %s", wifiSsid.c_str());
+    Serial.printf("[WIFI] Connecting to '%s'", wifiSsid.c_str());
 
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 24) {
@@ -587,41 +719,33 @@ void setup() {
       Serial.print(".");
       attempts++;
     }
-    connected = (WiFi.status() == WL_CONNECTED);
+    Serial.println();
   }
 
   camHttpServer.on("/", HTTP_GET, handlePortalPage);
+  camHttpServer.on("/scan_wifi", HTTP_GET, handleScanWifi);
   camHttpServer.on("/save_wifi", HTTP_POST, handlePortalSave);
   camHttpServer.on("/wifi_config", HTTP_POST, handleApiWifiConfig);
   camHttpServer.on("/wifi_config", HTTP_OPTIONS, handleApiWifiConfig);
   camHttpServer.on("/capture", HTTP_GET, handleSingleCapture);
+  camHttpServer.begin();
+  streamServer.begin();
 
-  if (connected) {
-    Serial.printf("\n[WIFI] Online at http://%s\n", WiFi.localIP().toString().c_str());
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("[WIFI] Router IP: http://%s\n", WiFi.localIP().toString().c_str());
     configTime(GMT_OFFSET, DAYLIGHT_OFF, NTP_SERVER);
 
-    camHttpServer.begin();
-    streamServer.begin();
-
-    sendHeartbeatToServer();
-    syncEnrolledPortraitsFromServer();
-    syncOfflineBufferToServer();
+    if (sendHeartbeatToServer()) {
+      syncEnrolledPortraitsFromServer();
+      syncOfflineBufferToServer();
+    }
   } else {
-    apFallbackMode = true;
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP("ES-SEE-CAM-Setup");
-    camHttpServer.begin();
-    Serial.println("\n[SETUP AP] Connect phone/laptop to Wi-Fi 'ES-SEE-CAM-Setup' and open http://192.168.4.1");
+    Serial.println("[WIFI] Router not connected yet. Open http://192.168.4.1 on 'ES-SEE-CAM-Setup'.");
   }
 }
 
 void loop() {
   camHttpServer.handleClient();
-
-  if (apFallbackMode) {
-    delay(10);
-    return;
-  }
 
   if (WiFi.status() == WL_CONNECTED) {
     serviceMjpegStream();
@@ -630,12 +754,16 @@ void loop() {
       lastHeartbeatMs = millis();
       sendHeartbeatToServer();
     }
+  } else {
+    startSetupApIfNeeded();
   }
 
   if (millis() - lastCaptureMs < CAPTURE_INTERVAL_MS) return;
   lastCaptureMs = millis();
 
-  camera_fb_t* fb = esp_camera_fb_get();
+  if (!serverLinked && !sdAvailable) return;
+
+  camera_fb_t* fb = grabFreshFrame();
   if (!fb) return;
 
   if (!hasSignificantMotion(fb)) {
@@ -646,7 +774,7 @@ void loop() {
   TimeStamps ts;
   getCurrentTimestamps(ts);
 
-  if (WiFi.status() != WL_CONNECTED) {
+  if (WiFi.status() != WL_CONNECTED || !serverLinked) {
     bufferFrameSilentlyWhenOffline(fb, ts);
     esp_camera_fb_return(fb);
     return;
