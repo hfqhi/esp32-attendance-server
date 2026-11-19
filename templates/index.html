@@ -456,26 +456,21 @@
       >
         <div
           id="enrollFormCard"
-          class="bg-slate-900 border border-slate-800 rounded-xl p-5 transition-colors"
+          class="bg-slate-900 border border-slate-800 rounded-xl p-5 self-start transition-colors"
         >
           <div class="flex items-center justify-between mb-4">
-            <div class="flex items-center gap-2">
-              <h2 id="enrollFormTitle" class="text-base font-semibold">
-                Enroll Student
-              </h2>
-              <span
-                id="enrollEditBadge"
-                class="hidden px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40"
-              >
-                Editing
-              </span>
-            </div>
+            <h2
+              id="enrollFormTitle"
+              class="text-base font-semibold text-slate-100"
+            >
+              Enroll Student
+            </h2>
             <button
               id="cancelEditStudentBtn"
               onclick="resetStudentForm()"
-              class="hidden text-xs font-semibold text-amber-300 hover:text-amber-200 px-2 py-1 rounded bg-amber-500/10 border border-amber-500/30"
+              class="hidden text-xs font-medium text-slate-300 hover:text-white px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 transition"
             >
-              Cancel Edit
+              Cancel
             </button>
           </div>
 
@@ -595,23 +590,18 @@
           class="bg-slate-900 border border-slate-800 rounded-xl p-5 self-start transition-colors"
         >
           <div class="flex items-center justify-between mb-4">
-            <div class="flex items-center gap-2">
-              <h2 id="schedFormTitle" class="text-base font-semibold">
-                Add Schedule
-              </h2>
-              <span
-                id="schedEditBadge"
-                class="hidden px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40"
-              >
-                Editing
-              </span>
-            </div>
+            <h2
+              id="schedFormTitle"
+              class="text-base font-semibold text-slate-100"
+            >
+              Add Schedule
+            </h2>
             <button
               id="cancelEditSchedBtn"
               onclick="resetScheduleForm()"
-              class="hidden text-xs font-semibold text-amber-300 hover:text-amber-200 px-2 py-1 rounded bg-amber-500/10 border border-amber-500/30"
+              class="hidden text-xs font-medium text-slate-300 hover:text-white px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 transition"
             >
-              Cancel Edit
+              Cancel
             </button>
           </div>
 

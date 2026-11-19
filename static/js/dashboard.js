@@ -29,6 +29,12 @@ const DAY_ORDER = {
   Sunday: 7,
 };
 
+const ICONS = {
+  calendar: `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>`,
+  edit: `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125"/></svg>`,
+  trash: `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>`,
+};
+
 const DAY_ACCENTS = {
   Monday: {
     header: "bg-sky-950/50 border-sky-800/60",
@@ -266,19 +272,30 @@ function renderStudentsTable() {
     cachedStudents
       .map((s) => {
         const isEditing = editingStudentOriginalId === s.student_id;
-        const rowHighlight = isEditing
-          ? "bg-amber-500/10 border-l-2 border-l-amber-400"
-          : "hover:bg-slate-800/40";
+        const rowBg = isEditing ? "bg-sky-500/10" : "hover:bg-slate-800/40";
+        const edgeAccent = isEditing ? "shadow-[inset_3px_0_0_0_#38bdf8]" : "";
+        const editBtnStyle = isEditing
+          ? "bg-sky-500/20 text-sky-300 ring-1 ring-sky-400/50"
+          : "text-slate-400 hover:text-sky-300 hover:bg-slate-800";
+
         return `
-      <tr class="${rowHighlight} transition">
-        <td class="py-3 px-4 font-mono text-xs text-sky-300">${s.student_id}</td>
+      <tr class="${rowBg} transition">
+        <td class="py-3 px-4 font-mono text-xs text-sky-300 ${edgeAccent}">${s.student_id}</td>
         <td class="py-3 px-4 font-medium text-slate-100">${s.full_name}</td>
         <td class="py-3 px-4"><span class="px-2 py-0.5 rounded text-xs font-semibold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">${s.section}</span></td>
         <td class="py-3 px-4 text-xs text-slate-400">${s.created_at}</td>
-        <td class="py-3 px-4 text-right space-x-2">
-          <button onclick="openStudentCalendar('${s.student_id}')" class="text-sky-400 hover:text-sky-300 text-xs font-medium">Calendar</button>
-          <button onclick="startEditStudent('${s.student_id}')" class="text-amber-400 hover:text-amber-300 text-xs font-medium">${isEditing ? "Editing..." : "Edit"}</button>
-          <button onclick="deleteStudent('${s.student_id}')" class="text-rose-400 hover:text-rose-300 text-xs font-medium">Remove</button>
+        <td class="py-3 px-4 text-right">
+          <div class="inline-flex items-center justify-end gap-1">
+            <button type="button" onclick="openStudentCalendar('${s.student_id}')" title="Attendance Calendar" aria-label="Attendance Calendar" class="p-1.5 rounded-lg text-slate-400 hover:text-indigo-300 hover:bg-slate-800 transition">
+              ${ICONS.calendar}
+            </button>
+            <button type="button" onclick="toggleEditStudent('${s.student_id}')" title="${isEditing ? "Cancel Edit" : "Edit Student"}" aria-label="${isEditing ? "Cancel Edit" : "Edit Student"}" class="p-1.5 rounded-lg transition ${editBtnStyle}">
+              ${ICONS.edit}
+            </button>
+            <button type="button" onclick="deleteStudent('${s.student_id}')" title="Remove Student" aria-label="Remove Student" class="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition">
+              ${ICONS.trash}
+            </button>
+          </div>
         </td>
       </tr>
     `;
@@ -318,21 +335,34 @@ function renderDayGroupedSchedules() {
           ? dayItems
               .map((s) => {
                 const isEditing = editingScheduleId === s.id;
-                const rowHighlight = isEditing
-                  ? "bg-amber-500/10 border-l-2 border-l-amber-400"
+                const rowBg = isEditing
+                  ? "bg-sky-500/10"
                   : "hover:bg-slate-800/40";
+                const edgeAccent = isEditing
+                  ? "shadow-[inset_3px_0_0_0_#38bdf8]"
+                  : "";
+                const editBtnStyle = isEditing
+                  ? "bg-sky-500/20 text-sky-300 ring-1 ring-sky-400/50"
+                  : "text-slate-400 hover:text-sky-300 hover:bg-slate-800";
+
                 return `
-            <tr class="${rowHighlight} transition">
-              <td class="py-3 px-4 w-32">
+            <tr class="${rowBg} transition">
+              <td class="py-3 px-4 w-32 ${edgeAccent}">
                 <span class="inline-block px-2.5 py-0.5 rounded-md font-mono text-xs font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
                   ${s.subject_code || "—"}
                 </span>
               </td>
               <td class="py-3 px-4 font-medium text-slate-100">${s.subject}</td>
               <td class="py-3 px-4 font-mono text-xs text-slate-300">${format12Hour(s.start_time)} - ${format12Hour(s.end_time)}</td>
-              <td class="py-3 px-4 text-right space-x-2">
-                <button onclick="startEditSchedule(${s.id})" class="text-amber-400 hover:text-amber-300 text-xs font-medium">${isEditing ? "Editing..." : "Edit"}</button>
-                <button onclick="deleteSchedule(${s.id})" class="text-rose-400 hover:text-rose-300 text-xs font-medium">Delete</button>
+              <td class="py-3 px-4 text-right">
+                <div class="inline-flex items-center justify-end gap-1">
+                  <button type="button" onclick="toggleEditSchedule(${s.id})" title="${isEditing ? "Cancel Edit" : "Edit Schedule"}" aria-label="${isEditing ? "Cancel Edit" : "Edit Schedule"}" class="p-1.5 rounded-lg transition ${editBtnStyle}">
+                    ${ICONS.edit}
+                  </button>
+                  <button type="button" onclick="deleteSchedule(${s.id})" title="Delete Schedule" aria-label="Delete Schedule" class="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition">
+                    ${ICONS.trash}
+                  </button>
+                </div>
               </td>
             </tr>
           `;
@@ -694,8 +724,13 @@ function badgeClass(status) {
   return "bg-rose-500/20 text-rose-400";
 }
 
-// --- STUDENT FORM & CRUD (DISTINCT EDIT MODE STYLING) ---
-function startEditStudent(studentId) {
+// --- STUDENT FORM & CRUD (TOGGLEABLE EDIT & REFINED DARK PALETTE) ---
+function toggleEditStudent(studentId) {
+  if (editingStudentOriginalId === studentId) {
+    resetStudentForm();
+    return;
+  }
+
   const student = cachedStudents.find((s) => s.student_id === studentId);
   if (!student) return;
 
@@ -705,26 +740,25 @@ function startEditStudent(studentId) {
 
   const card = document.getElementById("enrollFormCard");
   card.className =
-    "bg-amber-950/15 border-2 border-amber-500/70 rounded-xl p-5 transition-colors";
+    "bg-sky-950/15 border border-sky-500/50 ring-1 ring-sky-500/20 rounded-xl p-5 self-start transition-colors";
 
   document.getElementById("enrollFormTitle").textContent = "Edit Student";
   document.getElementById("enrollFormTitle").className =
-    "text-base font-bold text-amber-300";
-  document.getElementById("enrollEditBadge").classList.remove("hidden");
+    "text-base font-semibold text-sky-300";
   document.getElementById("cancelEditStudentBtn").classList.remove("hidden");
 
   const submitBtn = document.getElementById("enrollSubmitBtn");
   submitBtn.textContent = "Save Changes";
   submitBtn.className =
-    "w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold py-2 rounded-lg transition";
+    "w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold py-2 rounded-lg transition";
 
   document.getElementById("enrollId").value = student.student_id;
   document.getElementById("enrollName").value = student.full_name;
   document.getElementById("enrollSection").value = student.section;
   document.getElementById("enrollFeedback").textContent =
-    "Editing existing profile — new photo optional.";
+    "Photo optional when updating details.";
   document.getElementById("enrollFeedback").className =
-    "text-xs text-center font-medium text-amber-300";
+    "text-xs text-center font-medium text-slate-400";
   renderStudentsTable();
 }
 
@@ -735,12 +769,11 @@ function resetStudentForm() {
 
   const card = document.getElementById("enrollFormCard");
   card.className =
-    "bg-slate-900 border border-slate-800 rounded-xl p-5 transition-colors";
+    "bg-slate-900 border border-slate-800 rounded-xl p-5 self-start transition-colors";
 
   document.getElementById("enrollFormTitle").textContent = "Enroll Student";
   document.getElementById("enrollFormTitle").className =
     "text-base font-semibold text-slate-100";
-  document.getElementById("enrollEditBadge").classList.add("hidden");
   document.getElementById("cancelEditStudentBtn").classList.add("hidden");
 
   const submitBtn = document.getElementById("enrollSubmitBtn");
@@ -810,8 +843,13 @@ async function deleteStudent(id) {
   loadDashboardData();
 }
 
-// --- SCHEDULE FORM & CRUD (DISTINCT EDIT MODE STYLING) ---
-function startEditSchedule(schedId) {
+// --- SCHEDULE FORM & CRUD (TOGGLEABLE EDIT & REFINED DARK PALETTE) ---
+function toggleEditSchedule(schedId) {
+  if (editingScheduleId === schedId) {
+    resetScheduleForm();
+    return;
+  }
+
   const sched = cachedSchedules.find((s) => s.id === schedId);
   if (!sched) return;
 
@@ -819,28 +857,24 @@ function startEditSchedule(schedId) {
 
   const card = document.getElementById("schedFormCard");
   card.className =
-    "bg-amber-950/15 border-2 border-amber-500/70 rounded-xl p-5 self-start transition-colors";
+    "bg-sky-950/15 border border-sky-500/50 ring-1 ring-sky-500/20 rounded-xl p-5 self-start transition-colors";
 
   document.getElementById("schedFormTitle").textContent = "Edit Schedule";
   document.getElementById("schedFormTitle").className =
-    "text-base font-bold text-amber-300";
-  document.getElementById("schedEditBadge").classList.remove("hidden");
+    "text-base font-semibold text-sky-300";
   document.getElementById("cancelEditSchedBtn").classList.remove("hidden");
 
   const submitBtn = document.getElementById("schedSubmitBtn");
   submitBtn.textContent = "Save Changes";
   submitBtn.className =
-    "w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold py-2 rounded-lg transition";
+    "w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold py-2 rounded-lg transition";
 
   document.getElementById("schedDay").value = sched.day_of_week;
   document.getElementById("schedCode").value = sched.subject_code || "";
   document.getElementById("schedSubject").value = sched.subject;
   document.getElementById("schedStart").value = sched.start_time;
   document.getElementById("schedEnd").value = sched.end_time;
-  document.getElementById("scheduleFeedback").textContent =
-    `Editing ${sched.subject_code || sched.subject} (${sched.day_of_week}).`;
-  document.getElementById("scheduleFeedback").className =
-    "text-xs text-center font-medium text-amber-300";
+  document.getElementById("scheduleFeedback").textContent = "";
   renderDayGroupedSchedules();
 }
 
@@ -854,7 +888,6 @@ function resetScheduleForm() {
   document.getElementById("schedFormTitle").textContent = "Add Schedule";
   document.getElementById("schedFormTitle").className =
     "text-base font-semibold text-slate-100";
-  document.getElementById("schedEditBadge").classList.add("hidden");
   document.getElementById("cancelEditSchedBtn").classList.add("hidden");
 
   const submitBtn = document.getElementById("schedSubmitBtn");
