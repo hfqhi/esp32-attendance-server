@@ -1,5 +1,4 @@
 let cachedLogs = [];
-let cachedSpoofs = [];
 let cachedStudents = [];
 let cachedSchedules = [];
 
@@ -152,7 +151,7 @@ function switchTab(tab) {
   loadDashboardData();
 }
 
-// --- RECENT SCANS & SPOOF ALERTS ---
+// --- RECENT SCANS ---
 function onRecentScansScopeChange() {
   const scope = document.getElementById("recentScansScope").value;
   const dateInput = document.getElementById("recentScansDate");
@@ -216,45 +215,11 @@ function renderRecentScans() {
     `<p class="text-slate-500 text-xs py-8 text-center">${targetDate ? `No scans recorded on ${formatHumanDate(targetDate)}.` : "No scans recorded yet."}</p>`;
 }
 
-function renderSpoofAlerts() {
-  const panel = document.getElementById("spoofAlertPanel");
-  const list = document.getElementById("spoofAlertsList");
-  if (!panel || !list) return;
-
-  if (!cachedSpoofs || cachedSpoofs.length === 0) {
-    panel.classList.add("hidden");
-    return;
-  }
-
-  panel.classList.remove("hidden");
-  list.innerHTML = cachedSpoofs
-    .map(
-      (sp) => `
-    <div class="p-2.5 rounded-xl bg-slate-900/90 border border-rose-500/30 flex items-center justify-between gap-2">
-      <div class="min-w-0">
-        <p class="font-semibold text-rose-200 truncate">${sp.suspected_name}</p>
-        <p class="text-[11px] text-slate-400 truncate">${sp.source} • ${sp.date_str} ${sp.time_str}</p>
-      </div>
-      <button type="button" onclick="openProofModal('${sp.proof_image}', 'Spoof Attempt: ${sp.suspected_name.replace(/'/g, "\\'")}', '${sp.source} • Texture ${sp.texture_score} • ${sp.date_str} ${sp.time_str}')" class="shrink-0 px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 font-semibold text-[11px] transition">
-        Inspect
-      </button>
-    </div>
-  `,
-    )
-    .join("");
-}
-
-async function clearSpoofAlerts() {
-  await fetch("/api/spoofs/clear", { method: "DELETE" });
-  loadDashboardData();
-}
-
 async function loadDashboardData() {
   const res = await fetch("/api/dashboard_data");
   const data = await res.json();
 
   cachedLogs = data.logs;
-  cachedSpoofs = data.spoofs || [];
   cachedStudents = data.students;
   cachedSchedules = [...data.schedules].sort((a, b) => {
     const dDiff =
@@ -305,7 +270,6 @@ async function loadDashboardData() {
   filterStuSel.value = prevFilterStu;
 
   renderRecentScans();
-  renderSpoofAlerts();
   refreshLogsDisplay();
   renderStudentsTable();
   renderDayGroupedSchedules();
@@ -1001,6 +965,12 @@ async function submitScheduleForm() {
 }
 
 async function deleteSchedule(id) {
+  const sched = cachedSchedules.find((s) => s.id === id);
+  const label = sched
+    ? `${sched.subject_code ? sched.subject_code + " - " : ""}${sched.subject} (${sched.day_of_week})`
+    : "this class schedule";
+  if (!confirm(`Delete ${label}?`)) return;
+
   await fetch(`/api/schedules/${id}`, { method: "DELETE" });
   if (editingScheduleId === id) resetScheduleForm();
   loadDashboardData();
