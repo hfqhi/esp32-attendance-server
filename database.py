@@ -62,7 +62,6 @@ def init_db():
         )
     """)
 
-    # Safe migrations for existing databases
     sched_cols = [r["name"] for r in cur.execute("PRAGMA table_info(schedules)").fetchall()]
     if "day_of_week" not in sched_cols:
         cur.execute("ALTER TABLE schedules ADD COLUMN day_of_week TEXT NOT NULL DEFAULT 'Monday'")
@@ -149,37 +148,45 @@ def get_active_schedule(override_subject=None):
     return None, None, None
 
 
-def get_ended_classes_with_missing_students():
+def auto_mark_ended_classes():
+    """Automatically logs ABSENT for any student who did not scan before a scheduled class ended."""
     conn = get_db()
     now = datetime.now()
     now_str = now.strftime("%H:%M")
     today_day = now.strftime("%A")
     today_date = now.strftime("%Y-%m-%d")
 
-    total_students = conn.execute("SELECT COUNT(*) FROM students").fetchone()[0]
-    if total_students == 0:
+    students = conn.execute("SELECT student_id, full_name FROM students").fetchall()
+    if not students:
         conn.close()
-        return []
+        return 0
 
     ended_schedules = conn.execute(
         "SELECT * FROM schedules WHERE day_of_week = ? AND end_time < ? ORDER BY end_time ASC",
         (today_day, now_str),
     ).fetchall()
 
-    pending = []
+    newly_marked = 0
     for s in ended_schedules:
-        logged_count = conn.execute(
-            "SELECT COUNT(*) FROM attendance_logs WHERE subject = ? AND date_str = ?",
-            (s["subject"], today_date),
-        ).fetchone()[0]
-        missing = total_students - logged_count
-        if missing > 0:
-            pending.append({
-                "subject_code": s["subject_code"],
-                "subject": s["subject"],
-                "end_time": s["end_time"],
-                "missing_count": missing,
-            })
+        end_dt = datetime.strptime(s["end_time"], "%H:%M")
+        end_time_12h = f"{end_dt.strftime('%I:%M %p')} (Auto)"
 
+        for stu in students:
+            exists = conn.execute(
+                "SELECT 1 FROM attendance_logs WHERE student_id = ? AND subject = ? AND date_str = ?",
+                (stu["student_id"], s["subject"], today_date),
+            ).fetchone()
+            if not exists:
+                try:
+                    conn.execute("""
+                        INSERT INTO attendance_logs (student_id, full_name, subject_code, subject, status, date_str, time_str, proof_image)
+                        VALUES (?, ?, ?, ?, 'ABSENT', ?, ?, '')
+                    """, (stu["student_id"], stu["full_name"], s["subject_code"], s["subject"], today_date, end_time_12h))
+                    newly_marked += 1
+                except sqlite3.IntegrityError:
+                    pass
+
+    if newly_marked > 0:
+        conn.commit()
     conn.close()
-    return pending
+    return newly_marked

@@ -10,9 +10,9 @@ import numpy as np
 from flask import Flask, Response, jsonify, render_template, request, send_from_directory
 
 from database import (
+    auto_mark_ended_classes,
     get_active_schedule,
     get_db,
-    get_ended_classes_with_missing_students,
     init_db,
     validate_schedule_input,
 )
@@ -135,6 +135,8 @@ def sync_offline_capture():
 # --- DASHBOARD DATA & CRUD ---
 @app.route("/api/dashboard_data", methods=["GET"])
 def dashboard_data():
+    auto_mark_ended_classes()
+
     conn = get_db()
     students = [dict(r) for r in conn.execute("SELECT * FROM students ORDER BY full_name").fetchall()]
     schedules = [dict(r) for r in conn.execute("""
@@ -164,7 +166,6 @@ def dashboard_data():
         "logs": logs,
         "spoofs": spoofs,
         "active_subject": active_label,
-        "pending_absences": get_ended_classes_with_missing_students(),
         "esp32": get_esp32_status(),
     })
 
@@ -357,6 +358,8 @@ def delete_schedule(sched_id):
 
 @app.route("/api/verify_frame", methods=["POST"])
 def verify_frame():
+    auto_mark_ended_classes()
+
     override_subject = None
     if request.is_json:
         data = request.json
@@ -440,39 +443,8 @@ def verify_frame():
     })
 
 
-@app.route("/api/mark_absences", methods=["POST"])
-def mark_absences():
-    subject = request.json.get("subject", "").strip()
-    if not subject:
-        return jsonify({"success": False, "message": "Select a subject first."}), 400
-
-    now_dt = datetime.now()
-    date_str = now_dt.strftime("%Y-%m-%d")
-    time_str = now_dt.strftime("%I:%M:%S %p")
-
-    conn = get_db()
-    sched = conn.execute("SELECT subject_code FROM schedules WHERE subject = ?", (subject,)).fetchone()
-    subject_code = sched["subject_code"] if sched else ""
-
-    students = conn.execute("SELECT * FROM students").fetchall()
-    added = 0
-    for s in students:
-        try:
-            conn.execute("""
-                INSERT INTO attendance_logs (student_id, full_name, subject_code, subject, status, date_str, time_str, proof_image)
-                VALUES (?, ?, ?, ?, 'ABSENT', ?, ?, '')
-            """, (s["student_id"], s["full_name"], subject_code, subject, date_str, time_str))
-            added += 1
-        except sqlite3.IntegrityError:
-            pass
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True, "message": f"Marked {added} student(s) ABSENT for {subject}."})
-
-
 @app.route("/api/logs/<int:log_id>", methods=["DELETE"])
 def delete_single_log(log_id):
-    """Deletes a single attendance log record and its associated proof image."""
     conn = get_db()
     row = conn.execute("SELECT proof_image FROM attendance_logs WHERE id = ?", (log_id,)).fetchone()
     if row and row["proof_image"]:
