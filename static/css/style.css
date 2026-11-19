@@ -1,0 +1,22 @@
+.att-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(115px, 1fr));
+}
+
+.lcd-banner {
+  transition:
+    background-color 0.25s ease,
+    border-color 0.25s ease,
+    color 0.25s ease,
+    box-shadow 0.25s ease;
+}
+
+.lcd-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  flex-shrink: 0;
+  transition:
+    background-color 0.25s ease,
+    box-shadow 0.25s ease;
+}

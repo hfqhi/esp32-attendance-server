@@ -1,0 +1,755 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CPE-3B Facial Attendance</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/style.css') }}"
+    />
+  </head>
+  <body class="bg-slate-950 text-slate-100 min-h-screen font-sans">
+    <!-- Top Bar -->
+    <header
+      class="bg-slate-900 border-b border-slate-800 px-6 py-3.5 flex flex-wrap items-center justify-between gap-3"
+    >
+      <h1 class="text-lg font-bold text-emerald-400 tracking-tight">
+        ESP32-CAM Facial Attendance
+      </h1>
+      <div class="flex items-center gap-2.5">
+        <span
+          id="activeClassBadge"
+          class="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+        >
+          Loading...
+        </span>
+        <span
+          id="liveClock"
+          class="text-xs font-mono text-slate-300 bg-slate-800 px-3 py-1 rounded-lg"
+        ></span>
+      </div>
+    </header>
+
+    <!-- Navigation -->
+    <nav
+      class="bg-slate-900/60 border-b border-slate-800 px-6 flex gap-6 text-sm font-medium"
+    >
+      <button
+        onclick="switchTab('kiosk')"
+        id="tab-kiosk"
+        class="py-3 border-b-2 border-emerald-400 text-emerald-400"
+      >
+        Live Scanner
+      </button>
+      <button
+        onclick="switchTab('logs')"
+        id="tab-logs"
+        class="py-3 border-b-2 border-transparent text-slate-400 hover:text-slate-200"
+      >
+        Attendance Logs
+      </button>
+      <button
+        onclick="switchTab('enroll')"
+        id="tab-enroll"
+        class="py-3 border-b-2 border-transparent text-slate-400 hover:text-slate-200"
+      >
+        Enrolled Faces
+      </button>
+      <button
+        onclick="switchTab('schedules')"
+        id="tab-schedules"
+        class="py-3 border-b-2 border-transparent text-slate-400 hover:text-slate-200"
+      >
+        Schedules
+      </button>
+    </nav>
+
+    <main class="max-w-6xl mx-auto p-6 space-y-5">
+      <!-- Insecure Host Warning -->
+      <div
+        id="insecureContextBanner"
+        class="hidden bg-rose-500/10 border border-rose-500/40 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs"
+      >
+        <span class="text-rose-300 font-medium">
+          Camera blocked on
+          <span id="currentOriginLabel" class="font-mono"></span>. Open via
+          <span class="font-mono text-white">localhost</span> or select
+          ESP32-CAM.
+        </span>
+        <a
+          id="switchLocalhostBtn"
+          href="http://localhost:5000"
+          class="bg-rose-600 hover:bg-rose-500 text-white font-semibold px-3 py-1.5 rounded-lg transition"
+        >
+          Open localhost:5000
+        </a>
+      </div>
+
+      <!-- TAB 1: LIVE SCANNER -->
+      <section id="view-kiosk" class="space-y-4">
+        <div
+          id="pendingAbsenceBanner"
+          class="hidden bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs"
+        >
+          <span
+            id="pendingAbsenceText"
+            class="text-amber-300 font-medium"
+          ></span>
+          <button
+            id="pendingAbsenceBtn"
+            class="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-3 py-1.5 rounded-lg transition"
+          >
+            Mark Remaining Absent
+          </button>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div
+            class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-5"
+          >
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+              <div class="flex items-center gap-2.5">
+                <h2 class="text-base font-semibold">Camera Feed</h2>
+                <span
+                  id="camPermissionBadge"
+                  class="px-2 py-0.5 rounded text-[11px] font-medium bg-slate-800 text-slate-400 border border-slate-700"
+                >
+                  Checking...
+                </span>
+              </div>
+
+              <div class="flex flex-wrap items-center gap-2">
+                <select
+                  id="cameraDeviceSelect"
+                  onchange="onCameraDeviceChange()"
+                  class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1.5 text-slate-200 max-w-[170px] truncate"
+                ></select>
+                <select
+                  id="overrideSubject"
+                  class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1.5 text-slate-200 max-w-[170px] truncate"
+                >
+                  <option value="">Auto Schedule</option>
+                </select>
+                <button
+                  id="toggleScanBtn"
+                  onclick="toggleScanner()"
+                  class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-1.5 rounded-lg transition"
+                >
+                  Start Scanner
+                </button>
+              </div>
+            </div>
+
+            <div
+              class="relative bg-black rounded-lg overflow-hidden aspect-video flex items-center justify-center border border-slate-800"
+            >
+              <video
+                id="kioskVideo"
+                autoplay
+                playsinline
+                muted
+                class="w-full h-full object-cover hidden"
+              ></video>
+              <img
+                id="kioskEspImg"
+                alt="ESP32-CAM Feed"
+                class="w-full h-full object-cover hidden"
+              />
+              <canvas id="kioskCanvas" class="hidden"></canvas>
+
+              <div
+                id="faceGuide"
+                class="hidden pointer-events-none absolute inset-0 flex items-center justify-center"
+              >
+                <div
+                  class="w-48 h-60 border-2 border-dashed border-emerald-400/60 rounded-2xl"
+                ></div>
+              </div>
+
+              <div
+                id="cameraPlaceholder"
+                class="p-6 text-center max-w-sm space-y-3"
+              >
+                <p id="cameraStatusText" class="text-slate-400 text-sm">
+                  Camera Standby
+                </p>
+                <button
+                  id="kioskGrantPermBtn"
+                  type="button"
+                  onclick="requestCameraPermission('kiosk')"
+                  class="hidden bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition"
+                >
+                  Allow Camera Access
+                </button>
+              </div>
+            </div>
+
+            <!-- Color-Coded LCD Status Display -->
+            <div
+              id="lcdBanner"
+              class="lcd-banner mt-4 px-4 py-3.5 rounded-xl bg-slate-800/90 border border-slate-700 font-mono text-sm text-slate-300 flex items-center justify-between gap-3"
+            >
+              <div class="flex items-center gap-2.5 min-w-0">
+                <span id="lcdDot" class="lcd-dot bg-slate-500"></span>
+                <span id="lcdMessageText" class="truncate"
+                  >Standby — Press Start Scanner</span
+                >
+              </div>
+              <span
+                id="lcdStatusTag"
+                class="text-[11px] font-bold tracking-wider px-2 py-0.5 rounded bg-black/30 shrink-0"
+              >
+                STANDBY
+              </span>
+            </div>
+          </div>
+
+          <!-- Recent Scans -->
+          <div
+            class="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col"
+          >
+            <h2 class="text-base font-semibold mb-3">Recent Scans</h2>
+            <div
+              id="recentFeed"
+              class="space-y-2 overflow-y-auto max-h-[420px] pr-1 text-sm"
+            ></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: ATTENDANCE LOGS & CALENDAR -->
+      <section id="view-logs" class="hidden space-y-4">
+        <div class="grid grid-cols-3 gap-4">
+          <div
+            class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between"
+          >
+            <span class="text-xs uppercase text-slate-400 font-semibold"
+              >Present</span
+            >
+            <span id="countPresent" class="text-2xl font-bold text-emerald-400"
+              >0</span
+            >
+          </div>
+          <div
+            class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between"
+          >
+            <span class="text-xs uppercase text-slate-400 font-semibold"
+              >Late</span
+            >
+            <span id="countLate" class="text-2xl font-bold text-amber-400"
+              >0</span
+            >
+          </div>
+          <div
+            class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between"
+          >
+            <span class="text-xs uppercase text-slate-400 font-semibold"
+              >Absent</span
+            >
+            <span id="countAbsent" class="text-2xl font-bold text-rose-400"
+              >0</span
+            >
+          </div>
+        </div>
+
+        <div
+          class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4"
+        >
+          <div
+            class="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800"
+          >
+            <div class="flex flex-wrap items-center gap-2">
+              <div
+                class="inline-flex rounded-lg bg-slate-800 p-0.5 border border-slate-700"
+              >
+                <button
+                  onclick="setLogViewMode('table')"
+                  id="mode-table"
+                  class="px-3 py-1 text-xs font-semibold rounded-md bg-emerald-600 text-white"
+                >
+                  Table
+                </button>
+                <button
+                  onclick="setLogViewMode('calendar')"
+                  id="mode-calendar"
+                  class="px-3 py-1 text-xs font-semibold rounded-md text-slate-400 hover:text-slate-200"
+                >
+                  Calendar
+                </button>
+              </div>
+
+              <select
+                id="filterStudent"
+                onchange="refreshLogsDisplay()"
+                class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1.5 text-slate-200 max-w-[160px] truncate"
+              >
+                <option value="">All Students</option>
+              </select>
+
+              <select
+                id="filterSubject"
+                onchange="refreshLogsDisplay()"
+                class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1.5 text-slate-200 max-w-[170px] truncate"
+              >
+                <option value="">All Subjects</option>
+              </select>
+
+              <input
+                id="filterDate"
+                type="date"
+                onchange="refreshLogsDisplay()"
+                class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1 text-slate-200"
+              />
+
+              <button
+                id="todayFilterBtn"
+                type="button"
+                onclick="toggleTodayFilter()"
+                class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs font-semibold px-2.5 py-1.5 rounded-lg transition"
+              >
+                Today
+              </button>
+
+              <button
+                id="resetFilterBtn"
+                onclick="resetLogFilters()"
+                class="hidden text-xs text-slate-400 hover:text-slate-200 px-2 py-1"
+              >
+                Reset
+              </button>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <a
+                id="exportCsvBtn"
+                href="/api/export_csv"
+                class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3.5 py-1.5 rounded-lg transition whitespace-nowrap"
+              >
+                Export CSV
+              </a>
+
+              <button
+                type="button"
+                onclick="openManageModal()"
+                class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold px-3 py-1.5 rounded-lg transition whitespace-nowrap"
+              >
+                Manage
+              </button>
+            </div>
+          </div>
+
+          <div id="logsTableContainer" class="space-y-4"></div>
+
+          <div id="logsCalendarContainer" class="hidden space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div class="flex items-center gap-2">
+                <button
+                  onclick="changeCalendarMonth(-1)"
+                  class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold"
+                >
+                  &lt; Prev
+                </button>
+                <button
+                  onclick="jumpCalendarToday()"
+                  class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold"
+                >
+                  Today
+                </button>
+                <button
+                  onclick="changeCalendarMonth(1)"
+                  class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold"
+                >
+                  Next &gt;
+                </button>
+                <h3
+                  id="calendarMonthLabel"
+                  class="text-base font-bold text-slate-100 ml-2"
+                ></h3>
+              </div>
+
+              <div class="flex items-center gap-3 text-xs">
+                <span class="flex items-center gap-1.5"
+                  ><span class="w-2.5 h-2.5 rounded-sm bg-emerald-500"></span
+                  >Present</span
+                >
+                <span class="flex items-center gap-1.5"
+                  ><span class="w-2.5 h-2.5 rounded-sm bg-amber-500"></span
+                  >Late</span
+                >
+                <span class="flex items-center gap-1.5"
+                  ><span class="w-2.5 h-2.5 rounded-sm bg-rose-500"></span
+                  >Absent</span
+                >
+              </div>
+            </div>
+
+            <div class="overflow-x-auto rounded-lg border border-slate-800">
+              <div class="min-w-[805px]">
+                <div
+                  class="att-calendar-grid bg-slate-800/80 border-b border-slate-800 text-[11px] font-bold uppercase text-slate-400"
+                >
+                  <div class="py-2.5 text-center border-r border-slate-800">
+                    Sun
+                  </div>
+                  <div class="py-2.5 text-center border-r border-slate-800">
+                    Mon
+                  </div>
+                  <div class="py-2.5 text-center border-r border-slate-800">
+                    Tue
+                  </div>
+                  <div class="py-2.5 text-center border-r border-slate-800">
+                    Wed
+                  </div>
+                  <div class="py-2.5 text-center border-r border-slate-800">
+                    Thu
+                  </div>
+                  <div class="py-2.5 text-center border-r border-slate-800">
+                    Fri
+                  </div>
+                  <div class="py-2.5 text-center">Sat</div>
+                </div>
+                <div id="calendarGridBody"></div>
+              </div>
+            </div>
+
+            <div
+              id="calendarDayDetail"
+              class="p-3.5 rounded-lg bg-slate-800/60 border border-slate-800 text-xs text-slate-400"
+            >
+              Click a date above to view attendance details.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: ENROLLED FACES -->
+      <section
+        id="view-enroll"
+        class="hidden grid grid-cols-1 lg:grid-cols-3 gap-6"
+      >
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+          <div class="flex items-center justify-between mb-4">
+            <h2 id="enrollFormTitle" class="text-base font-semibold">
+              Enroll Student
+            </h2>
+            <button
+              id="cancelEditStudentBtn"
+              onclick="resetStudentForm()"
+              class="hidden text-xs text-slate-400 hover:text-slate-200"
+            >
+              Cancel
+            </button>
+          </div>
+
+          <div class="space-y-3 text-sm">
+            <input
+              id="enrollId"
+              type="text"
+              placeholder="Student ID (e.g., 2023-00142)"
+              class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
+            />
+            <input
+              id="enrollName"
+              type="text"
+              placeholder="Full Name"
+              class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
+            />
+            <input
+              id="enrollSection"
+              type="text"
+              value="CPE-3B"
+              placeholder="Section"
+              class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
+            />
+
+            <button
+              type="button"
+              onclick="startEnrollCamera()"
+              class="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs py-2 rounded-lg font-medium"
+            >
+              Open Camera
+            </button>
+
+            <div
+              class="relative bg-black rounded-lg overflow-hidden border border-slate-800 min-h-[160px] flex items-center justify-center"
+            >
+              <video
+                id="enrollVideo"
+                autoplay
+                playsinline
+                muted
+                class="w-full rounded-lg hidden"
+              ></video>
+              <img
+                id="enrollEspImg"
+                alt="ESP32-CAM Preview"
+                class="w-full rounded-lg hidden"
+              />
+              <div id="enrollCamHint" class="p-4 text-center space-y-2">
+                <p id="enrollCamStatusText" class="text-xs text-slate-500">
+                  Camera Preview
+                </p>
+                <button
+                  id="enrollGrantPermBtn"
+                  type="button"
+                  onclick="requestCameraPermission('enroll')"
+                  class="hidden bg-cyan-600 hover:bg-cyan-500 text-white text-[11px] font-semibold px-3 py-1.5 rounded-lg transition"
+                >
+                  Allow Camera Access
+                </button>
+              </div>
+            </div>
+            <canvas id="enrollCanvas" class="hidden"></canvas>
+
+            <button
+              id="enrollSubmitBtn"
+              type="button"
+              onclick="submitStudentForm()"
+              class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-lg"
+            >
+              Capture & Save
+            </button>
+
+            <input
+              id="enrollFileInput"
+              type="file"
+              accept="image/*"
+              onchange="uploadStudentImage(event)"
+              class="w-full text-xs text-slate-400 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-slate-800 file:text-slate-200 hover:file:bg-slate-700"
+            />
+            <p id="enrollFeedback" class="text-xs text-center font-medium"></p>
+          </div>
+        </div>
+
+        <div
+          class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-5"
+        >
+          <h2 class="text-base font-semibold mb-4">Registered Students</h2>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm">
+              <thead>
+                <tr
+                  class="border-b border-slate-800 text-slate-400 text-xs uppercase"
+                >
+                  <th class="py-3 px-4">Student ID</th>
+                  <th class="py-3 px-4">Name</th>
+                  <th class="py-3 px-4">Section</th>
+                  <th class="py-3 px-4">Registered</th>
+                  <th class="py-3 px-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody
+                id="studentsTableBody"
+                class="divide-y divide-slate-800/60"
+              ></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 4: DAY-GROUPED SCHEDULES -->
+      <section
+        id="view-schedules"
+        class="hidden grid grid-cols-1 lg:grid-cols-3 gap-6"
+      >
+        <div
+          class="bg-slate-900 border border-slate-800 rounded-xl p-5 self-start"
+        >
+          <div class="flex items-center justify-between mb-4">
+            <h2 id="schedFormTitle" class="text-base font-semibold">
+              Add Schedule
+            </h2>
+            <button
+              id="cancelEditSchedBtn"
+              onclick="resetScheduleForm()"
+              class="hidden text-xs text-slate-400 hover:text-slate-200"
+            >
+              Cancel
+            </button>
+          </div>
+
+          <div class="space-y-3 text-sm">
+            <select
+              id="schedDay"
+              class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-100"
+            >
+              <option value="Monday">Monday</option>
+              <option value="Tuesday">Tuesday</option>
+              <option value="Wednesday">Wednesday</option>
+              <option value="Thursday">Thursday</option>
+              <option value="Friday">Friday</option>
+              <option value="Saturday">Saturday</option>
+            </select>
+            <input
+              id="schedCode"
+              type="text"
+              placeholder="Subject Code (e.g., CPE 311)"
+              class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 uppercase"
+            />
+            <input
+              id="schedSubject"
+              type="text"
+              placeholder="Subject Name (e.g., Logic Circuits)"
+              class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
+            />
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="block text-[11px] text-slate-400 mb-1"
+                  >Start</label
+                >
+                <input
+                  id="schedStart"
+                  type="time"
+                  class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
+                />
+              </div>
+              <div>
+                <label class="block text-[11px] text-slate-400 mb-1">End</label>
+                <input
+                  id="schedEnd"
+                  type="time"
+                  class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
+                />
+              </div>
+            </div>
+            <button
+              id="schedSubmitBtn"
+              onclick="submitScheduleForm()"
+              class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-lg"
+            >
+              Save Schedule
+            </button>
+            <p
+              id="scheduleFeedback"
+              class="text-xs text-center font-medium"
+            ></p>
+          </div>
+        </div>
+
+        <div class="lg:col-span-2 space-y-4">
+          <div
+            class="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-wrap items-center gap-1.5"
+            id="scheduleDayFilterBar"
+          >
+            <button
+              onclick="setScheduleDayFilter('ALL')"
+              data-day="ALL"
+              class="sched-day-btn px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-600 text-white"
+            >
+              All Days
+            </button>
+            <button
+              onclick="setScheduleDayFilter('Monday')"
+              data-day="Monday"
+              class="sched-day-btn px-3 py-1 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200"
+            >
+              Mon
+            </button>
+            <button
+              onclick="setScheduleDayFilter('Tuesday')"
+              data-day="Tuesday"
+              class="sched-day-btn px-3 py-1 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200"
+            >
+              Tue
+            </button>
+            <button
+              onclick="setScheduleDayFilter('Wednesday')"
+              data-day="Wednesday"
+              class="sched-day-btn px-3 py-1 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200"
+            >
+              Wed
+            </button>
+            <button
+              onclick="setScheduleDayFilter('Thursday')"
+              data-day="Thursday"
+              class="sched-day-btn px-3 py-1 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200"
+            >
+              Thu
+            </button>
+            <button
+              onclick="setScheduleDayFilter('Friday')"
+              data-day="Friday"
+              class="sched-day-btn px-3 py-1 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200"
+            >
+              Fri
+            </button>
+            <button
+              onclick="setScheduleDayFilter('Saturday')"
+              data-day="Saturday"
+              class="sched-day-btn px-3 py-1 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200"
+            >
+              Sat
+            </button>
+          </div>
+
+          <div id="schedulesByDayContainer" class="space-y-4"></div>
+        </div>
+      </section>
+    </main>
+
+    <!-- MANAGE ATTENDANCE MODAL -->
+    <div
+      id="manageModal"
+      onclick="closeManageModal()"
+      class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4"
+    >
+      <div
+        onclick="event.stopPropagation()"
+        class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-5"
+      >
+        <div
+          class="flex items-center justify-between border-b border-slate-800 pb-3.5"
+        >
+          <h3 class="text-base font-bold text-slate-100">Manage Attendance</h3>
+          <button
+            type="button"
+            onclick="closeManageModal()"
+            class="text-xs text-slate-300 hover:text-white px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700"
+          >
+            Close
+          </button>
+        </div>
+
+        <div class="space-y-2.5">
+          <label
+            class="block text-xs font-semibold uppercase tracking-wide text-slate-400"
+            >Mark Absences</label
+          >
+          <div class="flex items-center gap-2.5">
+            <select
+              id="absenceSubjectSelect"
+              class="flex-1 min-w-0 truncate bg-slate-800 border border-slate-700 text-xs rounded-lg px-3 py-2.5 text-slate-200"
+            ></select>
+            <button
+              type="button"
+              onclick="markRemainingAbsent()"
+              class="shrink-0 whitespace-nowrap bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold px-4 py-2.5 rounded-lg transition"
+            >
+              Mark Absent
+            </button>
+          </div>
+        </div>
+
+        <div
+          class="pt-4 border-t border-slate-800 flex items-center justify-between gap-4"
+        >
+          <span class="text-xs font-semibold text-slate-300"
+            >Reset Attendance Logs</span
+          >
+          <button
+            type="button"
+            onclick="clearTestLogs()"
+            class="shrink-0 whitespace-nowrap bg-rose-950/90 hover:bg-rose-900 border border-rose-700/80 text-rose-300 text-xs font-semibold px-4 py-2 rounded-lg transition"
+          >
+            Clear Logs
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/camera.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+  </body>
+</html>
