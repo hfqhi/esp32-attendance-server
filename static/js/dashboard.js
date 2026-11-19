@@ -82,6 +82,21 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+function copyLanUrl() {
+  if (!cachedMobileUrl) return;
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(cachedMobileUrl).catch(() => {});
+  }
+  const el = document.getElementById("mobileAccessHint");
+  if (el) {
+    const prev = el.textContent;
+    el.textContent = `Copied: ${cachedMobileUrl}`;
+    setTimeout(() => {
+      el.textContent = prev;
+    }, 1600);
+  }
+}
+
 function openImagePreviewUrl(imageUrl, title, meta) {
   if (!imageUrl) return;
   document.getElementById("proofModalImg").src = imageUrl;
@@ -100,31 +115,29 @@ function closeProofModal() {
   document.getElementById("proofModalImg").src = "";
 }
 
-// --- ESP32-CAM WI-FI CONFIGURATION MODAL ---
+// --- ESP32-CAM WI-FI & DIRECT IP CONFIGURATION MODAL ---
 function openWifiConfigModal() {
   const modal = document.getElementById("wifiConfigModal");
   const statusEl = document.getElementById("wifiModalStatus");
   const feedbackEl = document.getElementById("wifiConfigFeedback");
   const ssidInput = document.getElementById("espWifiSsid");
   const serverInput = document.getElementById("espServerUrl");
+  const ipInput = document.getElementById("directEspIpInput");
 
   feedbackEl.textContent = "";
   document.getElementById("espWifiPass").value = "";
 
   if (typeof esp32Info !== "undefined" && esp32Info.online) {
-    statusEl.textContent = `Connected • IP ${esp32Info.ip}${esp32Info.ssid ? ` (${esp32Info.ssid})` : ""}`;
+    statusEl.textContent = `Online • IP ${esp32Info.ip}${esp32Info.ssid ? ` (${esp32Info.ssid})` : ""}`;
     statusEl.className = "text-xs text-emerald-400 mt-0.5";
+    ipInput.value = esp32Info.ip;
     if (!ssidInput.value && esp32Info.ssid) ssidInput.value = esp32Info.ssid;
   } else {
-    statusEl.textContent = "ESP32-CAM currently offline";
+    statusEl.textContent = "ESP32-CAM offline — Link IP or use Setup AP";
     statusEl.className = "text-xs text-amber-400 mt-0.5";
   }
 
-  serverInput.value =
-    typeof esp32Info !== "undefined" && esp32Info.server_url
-      ? esp32Info.server_url
-      : cachedMobileUrl || window.location.origin;
-
+  serverInput.value = cachedMobileUrl || window.location.origin;
   modal.classList.remove("hidden");
 }
 
@@ -132,26 +145,65 @@ function closeWifiConfigModal() {
   document.getElementById("wifiConfigModal").classList.add("hidden");
 }
 
+async function connectEsp32ByIp() {
+  const feedback = document.getElementById("wifiConfigFeedback");
+  const ip = document.getElementById("directEspIpInput").value.trim();
+  if (!ip) {
+    feedback.textContent = "Enter the ESP32-CAM IP address first.";
+    feedback.className = "text-xs text-center font-medium text-amber-400";
+    return;
+  }
+
+  feedback.textContent = `Connecting to ${ip}...`;
+  feedback.className = "text-xs text-center font-medium text-sky-400";
+
+  try {
+    const res = await fetch("/api/esp32/connect_ip", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ip }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      feedback.textContent = data.message;
+      feedback.className = "text-xs text-center font-medium text-emerald-400";
+      loadDashboardData();
+    } else {
+      feedback.textContent = data.message;
+      feedback.className = "text-xs text-center font-medium text-rose-400";
+    }
+  } catch (err) {
+    feedback.textContent = "Unable to connect to IP.";
+    feedback.className = "text-xs text-center font-medium text-rose-400";
+  }
+}
+
 async function saveEsp32WifiConfig() {
   const feedback = document.getElementById("wifiConfigFeedback");
   const ssid = document.getElementById("espWifiSsid").value.trim();
   const password = document.getElementById("espWifiPass").value;
   const serverUrl = document.getElementById("espServerUrl").value.trim();
+  const espIp = document.getElementById("directEspIpInput").value.trim();
 
   if (!ssid) {
-    feedback.textContent = "Enter a Wi-Fi SSID first.";
+    feedback.textContent = "Enter a 2.4 GHz Wi-Fi SSID first.";
     feedback.className = "text-xs text-center font-medium text-amber-400";
     return;
   }
 
-  feedback.textContent = "Sending configuration to ESP32-CAM...";
+  feedback.textContent = "Sending Wi-Fi settings to ESP32-CAM...";
   feedback.className = "text-xs text-center font-medium text-sky-400";
 
   try {
     const res = await fetch("/api/esp32/wifi_config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ssid, password, server_url: serverUrl }),
+      body: JSON.stringify({
+        ssid,
+        password,
+        server_url: serverUrl,
+        esp_ip: espIp,
+      }),
     });
     const data = await res.json();
     if (data.success) {
@@ -196,8 +248,15 @@ function formatHumanDate(yyyyMmDd) {
 setInterval(() => {
   const now = new Date();
   const dayName = now.toLocaleDateString("en-US", { weekday: "short" });
-  document.getElementById("liveClock").textContent =
-    `${dayName} • ${now.toLocaleTimeString()}`;
+  const deskClock = document.getElementById("liveClock");
+  const mobClock = document.getElementById("liveClockMobile");
+  if (deskClock)
+    deskClock.textContent = `${dayName} • ${now.toLocaleTimeString()}`;
+  if (mobClock)
+    mobClock.textContent = now.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
 }, 1000);
 
 setInterval(loadDashboardData, 8000);
@@ -219,10 +278,10 @@ function switchTab(tab) {
     const btn = document.getElementById(`tab-${t}`);
     if (t === tab) {
       btn.className =
-        "px-3 sm:px-3.5 py-1.5 rounded-lg text-xs font-semibold transition bg-sky-500/15 text-sky-300 border border-sky-500/30 whitespace-nowrap";
+        "py-2 sm:py-1.5 px-1.5 rounded-lg text-[11px] sm:text-xs font-semibold transition bg-sky-500/15 text-sky-300 border border-sky-500/30 text-center truncate";
     } else {
       btn.className =
-        "px-3 sm:px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent whitespace-nowrap";
+        "py-2 sm:py-1.5 px-1.5 rounded-lg text-[11px] sm:text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent text-center truncate";
     }
   });
   loadDashboardData();
@@ -272,18 +331,18 @@ function renderRecentScans() {
             ? `<span class="text-slate-500">${l.date_str} • </span>`
             : "";
         const proofBtn = l.proof_image
-          ? `<button type="button" onclick="openProofModal('${l.proof_image}', '${l.full_name.replace(/'/g, "\\'")}', '${l.subject_code || l.subject} • ${l.date_str} ${l.time_str}')" title="View Capture Proof" class="p-1 rounded text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition">${ICONS.photo}</button>`
+          ? `<button type="button" onclick="openProofModal('${l.proof_image}', '${l.full_name.replace(/'/g, "\\'")}', '${l.subject_code || l.subject} • ${l.date_str} ${l.time_str}')" title="View Capture Proof" class="p-1.5 rounded text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition">${ICONS.photo}</button>`
           : "";
 
         return `
       <div class="p-3 rounded-xl bg-slate-900/80 border border-slate-800 flex justify-between items-center gap-2">
         <div class="min-w-0">
-          <p class="font-semibold text-slate-100 truncate">${l.full_name}</p>
-          <p class="text-xs text-slate-400 truncate">${subjBadge} • ${datePrefix}${l.time_str}</p>
+          <p class="font-semibold text-slate-100 truncate text-xs sm:text-sm">${l.full_name}</p>
+          <p class="text-[11px] sm:text-xs text-slate-400 truncate">${subjBadge} • ${datePrefix}${l.time_str}</p>
         </div>
-        <div class="flex items-center gap-1.5 shrink-0">
+        <div class="flex items-center gap-1 shrink-0">
           ${proofBtn}
-          <span class="px-2 py-0.5 rounded-md text-xs font-bold ${badgeClass(l.status)}">${l.status}</span>
+          <span class="px-2 py-0.5 rounded-md text-[10px] sm:text-xs font-bold ${badgeClass(l.status)}">${l.status}</span>
         </div>
       </div>
     `;
@@ -308,7 +367,7 @@ async function loadDashboardData() {
   document.getElementById("activeClassBadge").textContent = data.active_subject;
   const mobileHint = document.getElementById("mobileAccessHint");
   if (mobileHint && cachedMobileUrl) {
-    mobileHint.textContent = `Phone Wi-Fi URL: ${cachedMobileUrl}`;
+    mobileHint.textContent = `Server: ${cachedMobileUrl}`;
   }
 
   const enrolledCountEl = document.getElementById("enrolledCountBadge");
@@ -380,20 +439,28 @@ function renderStudentsTable() {
 
         return `
       <tr class="${rowBg} transition">
-        <td class="py-3 px-4 ${edgeAccent}">${avatarHtml}</td>
-        <td class="py-3 px-4 font-mono text-xs text-sky-300">${s.student_id}</td>
-        <td class="py-3 px-4 font-medium text-slate-100">${s.full_name}</td>
-        <td class="py-3 px-4"><span class="px-2 py-0.5 rounded text-xs font-semibold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">${s.section}</span></td>
-        <td class="py-3 px-4 text-xs text-slate-400">${s.created_at}</td>
-        <td class="py-3 px-4 text-right">
-          <div class="inline-flex items-center justify-end gap-1">
-            <button type="button" onclick="openStudentCalendar('${s.student_id}')" title="Attendance Calendar" aria-label="Attendance Calendar" class="p-1.5 rounded-lg text-slate-400 hover:text-indigo-300 hover:bg-slate-800 transition">
+        <td class="py-3 px-3 sm:px-4 ${edgeAccent}">
+          <div class="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            ${avatarHtml}
+            <div class="min-w-0">
+              <p class="font-medium text-slate-100 truncate text-xs sm:text-sm">${s.full_name}</p>
+              <p class="font-mono text-[11px] text-sky-300 truncate">${s.student_id} <span class="sm:hidden text-indigo-300">• ${s.section}</span></p>
+            </div>
+          </div>
+        </td>
+        <td class="py-3 px-3 sm:px-4 hidden sm:table-cell">
+          <span class="px-2 py-0.5 rounded text-xs font-semibold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">${s.section}</span>
+        </td>
+        <td class="py-3 px-3 sm:px-4 text-xs text-slate-400 hidden md:table-cell">${s.created_at}</td>
+        <td class="py-3 px-3 sm:px-4 text-right">
+          <div class="inline-flex items-center justify-end gap-0.5 sm:gap-1">
+            <button type="button" onclick="openStudentCalendar('${s.student_id}')" title="Attendance Calendar" aria-label="Attendance Calendar" class="p-2 sm:p-1.5 rounded-lg text-slate-400 hover:text-indigo-300 hover:bg-slate-800 transition">
               ${ICONS.calendar}
             </button>
-            <button type="button" onclick="toggleEditStudent('${s.student_id}')" title="${isEditing ? "Cancel Edit" : "Edit Student"}" aria-label="${isEditing ? "Cancel Edit" : "Edit Student"}" class="p-1.5 rounded-lg transition ${editBtnStyle}">
+            <button type="button" onclick="toggleEditStudent('${s.student_id}')" title="${isEditing ? "Cancel Edit" : "Edit Student"}" aria-label="${isEditing ? "Cancel Edit" : "Edit Student"}" class="p-2 sm:p-1.5 rounded-lg transition ${editBtnStyle}">
               ${ICONS.edit}
             </button>
-            <button type="button" onclick="deleteStudent('${s.student_id}')" title="Remove Student" aria-label="Remove Student" class="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition">
+            <button type="button" onclick="deleteStudent('${s.student_id}')" title="Remove Student" aria-label="Remove Student" class="p-2 sm:p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition">
               ${ICONS.trash}
             </button>
           </div>
@@ -402,7 +469,7 @@ function renderStudentsTable() {
     `;
       })
       .join("") ||
-    `<tr><td colspan="6" class="py-6 px-4 text-center text-xs text-slate-500">No enrolled students.</td></tr>`;
+    `<tr><td colspan="4" class="py-6 px-4 text-center text-xs text-slate-500">No enrolled students.</td></tr>`;
 }
 
 // --- DAY-GROUPED SCHEDULES ---
@@ -448,19 +515,22 @@ function renderDayGroupedSchedules() {
 
                 return `
             <tr class="${rowBg} transition">
-              <td class="py-3 px-4 w-32 ${edgeAccent}">
-                <span class="inline-block px-2.5 py-0.5 rounded-md font-mono text-xs font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
-                  ${s.subject_code || "—"}
-                </span>
+              <td class="py-3 px-3 sm:px-4 ${edgeAccent}">
+                <div class="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2.5">
+                  <span class="inline-block w-fit px-2 py-0.5 rounded-md font-mono text-[11px] sm:text-xs font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+                    ${s.subject_code || "—"}
+                  </span>
+                  <span class="font-medium text-slate-100 text-xs sm:text-sm">${s.subject}</span>
+                </div>
+                <div class="sm:hidden font-mono text-[11px] text-slate-400 mt-1">${format12Hour(s.start_time)} - ${format12Hour(s.end_time)}</div>
               </td>
-              <td class="py-3 px-4 font-medium text-slate-100">${s.subject}</td>
-              <td class="py-3 px-4 font-mono text-xs text-slate-300">${format12Hour(s.start_time)} - ${format12Hour(s.end_time)}</td>
-              <td class="py-3 px-4 text-right">
-                <div class="inline-flex items-center justify-end gap-1">
-                  <button type="button" onclick="toggleEditSchedule(${s.id})" title="${isEditing ? "Cancel Edit" : "Edit Schedule"}" aria-label="${isEditing ? "Cancel Edit" : "Edit Schedule"}" class="p-1.5 rounded-lg transition ${editBtnStyle}">
+              <td class="py-3 px-3 sm:px-4 font-mono text-xs text-slate-300 hidden sm:table-cell">${format12Hour(s.start_time)} - ${format12Hour(s.end_time)}</td>
+              <td class="py-3 px-3 sm:px-4 text-right">
+                <div class="inline-flex items-center justify-end gap-0.5 sm:gap-1">
+                  <button type="button" onclick="toggleEditSchedule(${s.id})" title="${isEditing ? "Cancel Edit" : "Edit Schedule"}" aria-label="${isEditing ? "Cancel Edit" : "Edit Schedule"}" class="p-2 sm:p-1.5 rounded-lg transition ${editBtnStyle}">
                     ${ICONS.edit}
                   </button>
-                  <button type="button" onclick="deleteSchedule(${s.id})" title="Delete Schedule" aria-label="Delete Schedule" class="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition">
+                  <button type="button" onclick="deleteSchedule(${s.id})" title="Delete Schedule" aria-label="Delete Schedule" class="p-2 sm:p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition">
                     ${ICONS.trash}
                   </button>
                 </div>
@@ -469,11 +539,11 @@ function renderDayGroupedSchedules() {
           `;
               })
               .join("")
-          : `<tr><td colspan="4" class="py-4 px-4 text-center text-xs text-slate-500">No classes scheduled on ${day}.</td></tr>`;
+          : `<tr><td colspan="3" class="py-4 px-4 text-center text-xs text-slate-500">No classes scheduled on ${day}.</td></tr>`;
 
       return `
       <div class="bg-[#0d1424] border border-slate-800/90 rounded-2xl overflow-hidden shadow-lg shadow-black/20">
-        <div class="${accent.header} px-5 py-3 border-b flex items-center justify-between">
+        <div class="${accent.header} px-4 sm:px-5 py-3 border-b flex items-center justify-between">
           <span class="text-sm font-bold ${accent.title}">${day}</span>
           <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${accent.badge}">
             ${dayItems.length} class${dayItems.length === 1 ? "" : "es"}
@@ -483,10 +553,9 @@ function renderDayGroupedSchedules() {
           <table class="w-full text-left text-sm">
             <thead>
               <tr class="border-b border-slate-800/70 text-slate-400 text-[11px] uppercase">
-                <th class="py-2.5 px-4">Code</th>
-                <th class="py-2.5 px-4">Subject Name</th>
-                <th class="py-2.5 px-4">Time</th>
-                <th class="py-2.5 px-4 text-right">Actions</th>
+                <th class="py-2.5 px-3 sm:px-4">Subject</th>
+                <th class="py-2.5 px-3 sm:px-4 hidden sm:table-cell">Time</th>
+                <th class="py-2.5 px-3 sm:px-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-800/60">${rowsHtml}</tbody>
@@ -544,12 +613,12 @@ function setLogViewMode(mode) {
 
   document.getElementById("mode-table").className =
     mode === "table"
-      ? "px-3 py-1 text-xs font-semibold rounded-lg bg-sky-600 text-white"
-      : "px-3 py-1 text-xs font-semibold rounded-lg text-slate-400 hover:text-slate-200";
+      ? "px-3 py-1.5 sm:py-1 text-xs font-semibold rounded-lg bg-sky-600 text-white text-center"
+      : "px-3 py-1.5 sm:py-1 text-xs font-semibold rounded-lg text-slate-400 hover:text-slate-200 text-center";
   document.getElementById("mode-calendar").className =
     mode === "calendar"
-      ? "px-3 py-1 text-xs font-semibold rounded-lg bg-sky-600 text-white"
-      : "px-3 py-1 text-xs font-semibold rounded-lg text-slate-400 hover:text-slate-200";
+      ? "px-3 py-1.5 sm:py-1 text-xs font-semibold rounded-lg bg-sky-600 text-white text-center"
+      : "px-3 py-1.5 sm:py-1 text-xs font-semibold rounded-lg text-slate-400 hover:text-slate-200 text-center";
 
   refreshLogsDisplay();
 }
@@ -603,25 +672,29 @@ function renderDayGroupedLogsTable(filteredLogs) {
       const rowsHtml = dayLogs
         .map((l) => {
           const codeBadge = l.subject_code
-            ? `<span class="inline-block px-2 py-0.5 rounded font-mono text-xs font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 mr-2">${l.subject_code}</span>`
+            ? `<span class="inline-block px-1.5 py-0.5 rounded font-mono text-[11px] font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 mr-1.5">${l.subject_code}</span>`
             : "";
           const proofBtn = l.proof_image
-            ? `<button type="button" onclick="openProofModal('${l.proof_image}', '${l.full_name.replace(/'/g, "\\'")}', '${l.subject_code || l.subject} • ${l.date_str} ${l.time_str}')" title="View Capture Proof" class="p-1.5 rounded-lg text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition">${ICONS.photo}</button>`
+            ? `<button type="button" onclick="openProofModal('${l.proof_image}', '${l.full_name.replace(/'/g, "\\'")}', '${l.subject_code || l.subject} • ${l.date_str} ${l.time_str}')" title="View Capture Proof" class="p-2 sm:p-1.5 rounded-lg text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition">${ICONS.photo}</button>`
             : "";
 
           return `
         <tr class="hover:bg-slate-800/35 transition">
-          <td class="py-3 px-4">
-            <div class="font-medium text-slate-100">${l.full_name}</div>
+          <td class="py-3 px-3 sm:px-4">
+            <div class="font-medium text-slate-100 text-xs sm:text-sm">${l.full_name}</div>
             <div class="font-mono text-[11px] text-slate-400">${l.student_id}</div>
+            <div class="sm:hidden text-[11px] text-slate-300 mt-1">${codeBadge}${l.subject}</div>
           </td>
-          <td class="py-3 px-4 text-slate-200">${codeBadge}${l.subject}</td>
-          <td class="py-3 px-4"><span class="px-2.5 py-0.5 rounded-full text-xs font-bold ${badgeClass(l.status)}">${l.status}</span></td>
-          <td class="py-3 px-4 font-mono text-xs text-slate-300">${l.time_str}</td>
-          <td class="py-3 px-4 text-right">
-            <div class="inline-flex items-center justify-end gap-1">
+          <td class="py-3 px-3 sm:px-4 text-slate-200 hidden sm:table-cell">${codeBadge}${l.subject}</td>
+          <td class="py-3 px-3 sm:px-4">
+            <span class="px-2 py-0.5 rounded-full text-[10px] sm:text-xs font-bold ${badgeClass(l.status)}">${l.status}</span>
+            <div class="md:hidden font-mono text-[10px] text-slate-400 mt-1">${l.time_str}</div>
+          </td>
+          <td class="py-3 px-3 sm:px-4 font-mono text-xs text-slate-300 hidden md:table-cell">${l.time_str}</td>
+          <td class="py-3 px-3 sm:px-4 text-right">
+            <div class="inline-flex items-center justify-end gap-0.5 sm:gap-1">
               ${proofBtn}
-              <button type="button" onclick="deleteSingleLog(${l.id})" title="Delete This Log" aria-label="Delete This Log" class="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition">
+              <button type="button" onclick="deleteSingleLog(${l.id})" title="Delete This Log" aria-label="Delete This Log" class="p-2 sm:p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition">
                 ${ICONS.trash}
               </button>
             </div>
@@ -633,7 +706,7 @@ function renderDayGroupedLogsTable(filteredLogs) {
 
       return `
       <div class="border border-slate-800 rounded-xl overflow-hidden">
-        <div class="bg-slate-900/90 px-4 py-2.5 border-b border-slate-800 flex items-center justify-between">
+        <div class="bg-slate-900/90 px-3.5 sm:px-4 py-2.5 border-b border-slate-800 flex items-center justify-between">
           <span class="text-xs font-bold text-sky-300">${formatHumanDate(dateKey)}</span>
           <span class="text-[11px] text-slate-400">${dayLogs.length} record${dayLogs.length === 1 ? "" : "s"}</span>
         </div>
@@ -641,11 +714,11 @@ function renderDayGroupedLogsTable(filteredLogs) {
           <table class="w-full text-left text-sm border-collapse">
             <thead>
               <tr class="border-b border-slate-800/70 text-slate-400 text-[11px] uppercase">
-                <th class="py-2.5 px-4">Student</th>
-                <th class="py-2.5 px-4">Subject</th>
-                <th class="py-2.5 px-4">Status</th>
-                <th class="py-2.5 px-4">Time</th>
-                <th class="py-2.5 px-4 text-right">Actions</th>
+                <th class="py-2.5 px-3 sm:px-4">Student</th>
+                <th class="py-2.5 px-3 sm:px-4 hidden sm:table-cell">Subject</th>
+                <th class="py-2.5 px-3 sm:px-4">Status</th>
+                <th class="py-2.5 px-3 sm:px-4 hidden md:table-cell">Time</th>
+                <th class="py-2.5 px-3 sm:px-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-800/60">${rowsHtml}</tbody>
@@ -751,7 +824,7 @@ function renderAttendanceCalendar(filteredLogs) {
           : "";
 
       html += `
-        <div onclick="inspectCalendarDate('${dateKey}')" class="min-h-[96px] p-1.5 border-r last:border-r-0 border-slate-800/80 cursor-pointer transition hover:bg-slate-800/50 ${inCurrentMonth ? "bg-slate-950/40" : "bg-slate-900/40 opacity-45"}">
+        <div onclick="inspectCalendarDate('${dateKey}')" class="min-h-[86px] p-1.5 border-r last:border-r-0 border-slate-800/80 cursor-pointer transition hover:bg-slate-800/50 ${inCurrentMonth ? "bg-slate-950/40" : "bg-slate-900/40 opacity-45"}">
           <div class="flex justify-between items-center mb-1">
             <span class="text-xs font-semibold ${isToday ? "px-1.5 py-0.5 rounded bg-sky-500 text-slate-950" : "text-slate-300"}">${cellDate.getDate()}</span>
           </div>
@@ -863,11 +936,11 @@ function toggleEditStudent(studentId) {
 
   const card = document.getElementById("enrollFormCard");
   card.className =
-    "lg:col-span-4 bg-sky-950/15 border border-sky-500/50 ring-1 ring-sky-500/20 rounded-2xl p-5 sm:p-6 transition-colors shadow-xl shadow-black/25";
+    "lg:col-span-4 bg-sky-950/15 border border-sky-500/50 ring-1 ring-sky-500/20 rounded-2xl p-4 sm:p-6 transition-colors shadow-xl shadow-black/25";
 
   document.getElementById("enrollFormTitle").textContent = "Edit Student";
   document.getElementById("enrollFormTitle").className =
-    "text-base font-bold text-sky-300";
+    "text-sm sm:text-base font-bold text-sky-300";
   document.getElementById("cancelEditStudentBtn").classList.remove("hidden");
 
   const photoWrap = document.getElementById("editCurrentPhotoWrap");
@@ -892,6 +965,7 @@ function toggleEditStudent(studentId) {
   document.getElementById("enrollFeedback").className =
     "text-xs text-center font-medium text-slate-400";
   renderStudentsTable();
+  card.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function resetStudentForm() {
@@ -901,11 +975,11 @@ function resetStudentForm() {
 
   const card = document.getElementById("enrollFormCard");
   card.className =
-    "lg:col-span-4 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-5 sm:p-6 transition-colors shadow-xl shadow-black/25";
+    "lg:col-span-4 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-4 sm:p-6 transition-colors shadow-xl shadow-black/25";
 
   document.getElementById("enrollFormTitle").textContent = "Enroll Student";
   document.getElementById("enrollFormTitle").className =
-    "text-base font-bold text-white";
+    "text-sm sm:text-base font-bold text-white";
   document.getElementById("cancelEditStudentBtn").classList.add("hidden");
   document.getElementById("editCurrentPhotoWrap").classList.add("hidden");
 
@@ -934,12 +1008,13 @@ async function submitStudentForm() {
   }
 
   if (!editingStudentOriginalId && !imageBase64) {
-    feedback.textContent = "Open camera or upload a photo first.";
+    feedback.textContent = "Open camera or take/upload a photo first.";
     feedback.className = "text-xs text-center font-medium text-amber-400";
     return;
   }
 
-  const cameraSource = selectedCameraId === "esp32" ? "esp32" : "webcam";
+  const cameraSource =
+    selectedCameraId === "esp32" && enrollEspActive ? "esp32" : "webcam";
   const url = editingStudentOriginalId
     ? `/api/students/${encodeURIComponent(editingStudentOriginalId)}`
     : "/api/enroll";
@@ -990,11 +1065,11 @@ function toggleEditSchedule(schedId) {
 
   const card = document.getElementById("schedFormCard");
   card.className =
-    "lg:col-span-4 bg-sky-950/15 border border-sky-500/50 ring-1 ring-sky-500/20 rounded-2xl p-5 sm:p-6 transition-colors shadow-xl shadow-black/25";
+    "lg:col-span-4 bg-sky-950/15 border border-sky-500/50 ring-1 ring-sky-500/20 rounded-2xl p-4 sm:p-6 transition-colors shadow-xl shadow-black/25";
 
   document.getElementById("schedFormTitle").textContent = "Edit Schedule";
   document.getElementById("schedFormTitle").className =
-    "text-base font-bold text-sky-300";
+    "text-sm sm:text-base font-bold text-sky-300";
   document.getElementById("cancelEditSchedBtn").classList.remove("hidden");
 
   const submitBtn = document.getElementById("schedSubmitBtn");
@@ -1009,6 +1084,7 @@ function toggleEditSchedule(schedId) {
   document.getElementById("schedEnd").value = sched.end_time;
   document.getElementById("scheduleFeedback").textContent = "";
   renderDayGroupedSchedules();
+  card.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function resetScheduleForm() {
@@ -1016,11 +1092,11 @@ function resetScheduleForm() {
 
   const card = document.getElementById("schedFormCard");
   card.className =
-    "lg:col-span-4 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-5 sm:p-6 transition-colors shadow-xl shadow-black/25";
+    "lg:col-span-4 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-4 sm:p-6 transition-colors shadow-xl shadow-black/25";
 
   document.getElementById("schedFormTitle").textContent = "Add Schedule";
   document.getElementById("schedFormTitle").className =
-    "text-base font-bold text-white";
+    "text-sm sm:text-base font-bold text-white";
   document.getElementById("cancelEditSchedBtn").classList.add("hidden");
 
   const submitBtn = document.getElementById("schedSubmitBtn");
@@ -1083,7 +1159,7 @@ async function clearTestLogs() {
   if (!confirm("Clear all attendance logs?")) return;
   await fetch("/api/logs/clear", { method: "DELETE" });
   document.getElementById("calendarDayDetail").textContent =
-    "Click a date above to view attendance details.";
+    "Tap a date above to view attendance details.";
   loadDashboardData();
 }
 

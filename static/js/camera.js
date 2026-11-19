@@ -60,10 +60,17 @@ function renderCameraOptions() {
     : "ESP32-CAM (Offline)";
   select.appendChild(espOpt);
 
+  if (!isLocalhostOrSecure()) {
+    const phoneOpt = document.createElement("option");
+    phoneOpt.value = "phone_snap";
+    phoneOpt.textContent = "Phone Camera (Photo Capture)";
+    select.appendChild(phoneOpt);
+  }
+
   videoDevices.forEach((dev, idx) => {
     const opt = document.createElement("option");
     opt.value = dev.deviceId;
-    opt.textContent = dev.label || `Webcam ${idx + 1}`;
+    opt.textContent = dev.label || `Device Camera ${idx + 1}`;
     select.appendChild(opt);
   });
 
@@ -76,20 +83,28 @@ function renderCameraOptions() {
   } else if (videoDevices.length > 0) {
     select.value = videoDevices[0].deviceId;
     selectedCameraId = videoDevices[0].deviceId;
+  } else if (!isLocalhostOrSecure()) {
+    select.value = "phone_snap";
+    selectedCameraId = "phone_snap";
   } else {
     select.value = "esp32";
     selectedCameraId = "esp32";
   }
 
-  const banner = document.getElementById("insecureContextBanner");
-  if (banner) {
-    if (!isLocalhostOrSecure() && selectedCameraId !== "esp32") {
-      document.getElementById("currentOriginLabel").textContent =
-        window.location.origin;
-      banner.classList.remove("hidden");
-    } else {
-      banner.classList.add("hidden");
-    }
+  updatePhoneSnapState();
+}
+
+function updatePhoneSnapState() {
+  const snapBtn = document.getElementById("phoneSnapTriggerBtn");
+  const statusText = document.getElementById("cameraStatusText");
+  if (!snapBtn || !statusText || isScanning) return;
+
+  if (selectedCameraId === "phone_snap") {
+    statusText.textContent = "Tap below to verify using your phone camera";
+    snapBtn.classList.remove("hidden");
+  } else {
+    snapBtn.classList.add("hidden");
+    statusText.textContent = "Camera Standby";
   }
 }
 
@@ -117,11 +132,14 @@ function updatePermissionBadge() {
     return;
   }
 
-  if (!isLocalhostOrSecure()) {
-    badge.textContent = "HTTPS Required";
+  if (selectedCameraId === "phone_snap") {
+    badge.textContent = "Phone Cam";
     badge.className =
-      "px-2.5 py-0.5 rounded-md text-[11px] font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30";
-  } else if (camPermissionState === "granted") {
+      "px-2.5 py-0.5 rounded-md text-[11px] font-medium bg-indigo-500/15 text-indigo-300 border border-indigo-500/30";
+    return;
+  }
+
+  if (camPermissionState === "granted") {
     badge.textContent = "Ready";
     badge.className =
       "px-2.5 py-0.5 rounded-md text-[11px] font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30";
@@ -159,7 +177,7 @@ async function requestCameraPermission(target) {
   if (!isLocalhostOrSecure()) {
     showCameraError(
       target,
-      "Select ESP32-CAM or open over HTTPS to use phone webcam.",
+      "Use 'Phone Camera' mode or start server with --https for live video.",
     );
     return false;
   }
@@ -214,7 +232,9 @@ async function onCameraDeviceChange() {
 
   if (isScanning) {
     stopKioskStream();
-    await startKioskStream();
+    if (selectedCameraId !== "phone_snap") {
+      await toggleScanner();
+    }
   }
   if (
     enrollStream ||
@@ -269,8 +289,8 @@ function setLcdBanner(status, message) {
   };
 
   const current = styles[status] || styles.STANDBY;
-  banner.className = `lcd-banner mt-4 px-4 py-3.5 rounded-xl border font-mono text-sm flex items-center justify-between gap-3 ${current.box}`;
-  dot.className = `lcd-dot ${current.dot}`;
+  banner.className = `lcd-banner mt-3.5 sm:mt-4 px-3.5 sm:px-4 py-3 rounded-xl border font-mono text-xs sm:text-sm flex items-center justify-between gap-2.5 ${current.box}`;
+  dot.className = `lcd-dot shrink-0 ${current.dot}`;
   msgEl.textContent = message;
   tagEl.textContent = current.tag;
 }
@@ -282,9 +302,17 @@ async function startKioskStream() {
   const placeholder = document.getElementById("cameraPlaceholder");
   const guide = document.getElementById("faceGuide");
 
+  if (selectedCameraId === "phone_snap") {
+    document.getElementById("phoneSnapVerifyInput").click();
+    return false;
+  }
+
   if (selectedCameraId === "esp32") {
     if (!esp32Info.online || !esp32Info.stream_url) {
-      showCameraError("kiosk", "ESP32-CAM offline. Check Wi-Fi settings.");
+      showCameraError(
+        "kiosk",
+        "ESP32-CAM offline. Tap Wi-Fi icon to link or configure.",
+      );
       return false;
     }
     video.classList.add("hidden");
@@ -310,7 +338,7 @@ async function startKioskStream() {
   }
 
   if (!isLocalhostOrSecure()) {
-    showCameraError("kiosk", "Select ESP32-CAM to stream on phone.");
+    showCameraError("kiosk", "Select Phone Camera or run server with --https.");
     return false;
   }
 
@@ -338,7 +366,7 @@ async function startKioskStream() {
     guide.classList.remove("hidden");
     return true;
   } catch (err) {
-    showCameraError("kiosk", "Unable to start webcam.");
+    showCameraError("kiosk", "Unable to start device webcam.");
     return false;
   }
 }
@@ -364,14 +392,14 @@ function stopKioskStream() {
 
   document.getElementById("faceGuide").classList.add("hidden");
   document.getElementById("cameraPlaceholder").classList.remove("hidden");
-  document.getElementById("cameraStatusText").textContent = "Camera Standby";
   document.getElementById("kioskGrantPermBtn").classList.add("hidden");
+  updatePhoneSnapState();
 
   const btn = document.getElementById("toggleScanBtn");
-  btn.textContent = "Start Scanner";
+  btn.textContent = "Start";
   btn.className =
-    "bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-1.5 rounded-lg shadow-sm transition";
-  setLcdBanner("STANDBY", "Standby — Press Start Scanner");
+    "col-span-3 sm:w-auto bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 sm:px-4 py-2 sm:py-1.5 rounded-lg shadow-sm transition text-center whitespace-nowrap";
+  setLcdBanner("STANDBY", "Standby — Press Start");
 }
 
 async function toggleScanner() {
@@ -385,12 +413,44 @@ async function toggleScanner() {
 
   isScanning = true;
   const btn = document.getElementById("toggleScanBtn");
-  btn.textContent = "Stop Scanner";
+  btn.textContent = "Stop";
   btn.className =
-    "bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold px-4 py-1.5 rounded-lg shadow-sm transition";
+    "col-span-3 sm:w-auto bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold px-3 sm:px-4 py-2 sm:py-1.5 rounded-lg shadow-sm transition text-center whitespace-nowrap";
   setLcdBanner("NO_FACE", "Ready to Scan");
 
   scanInterval = setInterval(captureAndVerifyFrame, 650);
+}
+
+async function verifyPhoneSnapPhoto(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  setLcdBanner("NO_FACE", "Analyzing phone photo...");
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      const res = await fetch("/api/verify_frame", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image: reader.result,
+          source: "webcam",
+        }),
+      });
+      const data = await res.json();
+      if (data.status && data.message) {
+        setLcdBanner(data.status, data.message);
+      }
+      if (data.status === "LOGGED") {
+        loadDashboardData();
+      }
+    } catch (err) {
+      setLcdBanner("UNKNOWN", "Verification failed.");
+    } finally {
+      event.target.value = "";
+    }
+  };
+  reader.readAsDataURL(file);
 }
 
 async function captureCurrentFrameBase64(target) {
@@ -460,13 +520,17 @@ async function captureAndVerifyFrame() {
 // --- ENROLLMENT CAMERA & PHOTO UPLOAD ---
 async function startEnrollCamera() {
   stopEnrollStream();
+  uploadedEnrollBase64 = null;
   const video = document.getElementById("enrollVideo");
   const espImg = document.getElementById("enrollEspImg");
   const hint = document.getElementById("enrollCamHint");
 
   if (selectedCameraId === "esp32") {
     if (!esp32Info.online || !esp32Info.stream_url) {
-      showCameraError("enroll", "ESP32-CAM offline.");
+      showCameraError(
+        "enroll",
+        "ESP32-CAM offline. Tap Phone Camera or upload photo.",
+      );
       return;
     }
     video.classList.add("hidden");
@@ -477,20 +541,21 @@ async function startEnrollCamera() {
   }
 
   if (!isLocalhostOrSecure()) {
-    showCameraError("enroll", "Select ESP32-CAM or upload a photo below.");
+    document.getElementById("enrollCameraCaptureInput").click();
     return;
   }
 
   try {
-    const constraints = selectedCameraId
-      ? {
-          video: {
-            deviceId: { exact: selectedCameraId },
-            width: 640,
-            height: 480,
-          },
-        }
-      : { video: true };
+    const constraints =
+      selectedCameraId && selectedCameraId !== "phone_snap"
+        ? {
+            video: {
+              deviceId: { exact: selectedCameraId },
+              width: 640,
+              height: 480,
+            },
+          }
+        : { video: true };
     enrollStream = await navigator.mediaDevices.getUserMedia(constraints);
     camPermissionState = "granted";
     await refreshVideoDevices();
@@ -502,7 +567,10 @@ async function startEnrollCamera() {
     video.classList.remove("hidden");
     hint.classList.add("hidden");
   } catch (err) {
-    showCameraError("enroll", "Unable to open webcam.");
+    showCameraError(
+      "enroll",
+      "Unable to open webcam. Use Phone Camera button.",
+    );
   }
 }
 
@@ -513,6 +581,7 @@ function stopEnrollStream() {
   }
   const video = document.getElementById("enrollVideo");
   const espImg = document.getElementById("enrollEspImg");
+  const photoPreview = document.getElementById("enrollPhotoPreview");
   if (video) {
     video.srcObject = null;
     video.classList.add("hidden");
@@ -521,11 +590,15 @@ function stopEnrollStream() {
     espImg.src = "";
     espImg.classList.add("hidden");
   }
+  if (photoPreview) {
+    photoPreview.src = "";
+    photoPreview.classList.add("hidden");
+  }
   const hint = document.getElementById("enrollCamHint");
   if (hint) {
     hint.classList.remove("hidden");
     document.getElementById("enrollCamStatusText").textContent =
-      "Camera Preview";
+      "Camera or Photo Preview";
     document.getElementById("enrollGrantPermBtn").classList.add("hidden");
   }
 }
@@ -533,9 +606,17 @@ function stopEnrollStream() {
 function uploadStudentImage(event) {
   const file = event.target.files[0];
   if (!file) return;
+  stopEnrollStream();
   const reader = new FileReader();
   reader.onload = () => {
     uploadedEnrollBase64 = reader.result;
+    const preview = document.getElementById("enrollPhotoPreview");
+    const hint = document.getElementById("enrollCamHint");
+    if (preview && hint) {
+      preview.src = uploadedEnrollBase64;
+      preview.classList.remove("hidden");
+      hint.classList.add("hidden");
+    }
     const feedback = document.getElementById("enrollFeedback");
     feedback.textContent = `Loaded: ${file.name}`;
     feedback.className = "text-xs text-center font-medium text-sky-400";
