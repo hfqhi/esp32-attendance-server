@@ -1,4 +1,5 @@
 let cachedLogs = [];
+let cachedSpoofs = [];
 let cachedStudents = [];
 let cachedSchedules = [];
 
@@ -33,6 +34,7 @@ const ICONS = {
   calendar: `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>`,
   edit: `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125"/></svg>`,
   trash: `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>`,
+  photo: `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/></svg>`,
 };
 
 const DAY_ACCENTS = {
@@ -74,7 +76,10 @@ const DAY_ACCENTS = {
 };
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") closeManageModal();
+  if (e.key === "Escape") {
+    closeManageModal();
+    closeProofModal();
+  }
 });
 
 function openManageModal() {
@@ -83,6 +88,19 @@ function openManageModal() {
 
 function closeManageModal() {
   document.getElementById("manageModal").classList.add("hidden");
+}
+
+function openProofModal(relPath, title, meta) {
+  if (!relPath) return;
+  document.getElementById("proofModalImg").src = `/proofs/${relPath}`;
+  document.getElementById("proofModalTitle").textContent = title;
+  document.getElementById("proofModalMeta").textContent = meta;
+  document.getElementById("proofModal").classList.remove("hidden");
+}
+
+function closeProofModal() {
+  document.getElementById("proofModal").classList.add("hidden");
+  document.getElementById("proofModalImg").src = "";
 }
 
 function getTodayDateString() {
@@ -114,7 +132,7 @@ setInterval(() => {
     `${dayName} • ${now.toLocaleTimeString()}`;
 }, 1000);
 
-setInterval(loadDashboardData, 10000);
+setInterval(loadDashboardData, 8000);
 
 function format12Hour(time24) {
   const [hStr, mStr] = time24.split(":");
@@ -139,7 +157,7 @@ function switchTab(tab) {
   loadDashboardData();
 }
 
-// --- DROPDOWN-FILTERED RECENT SCANS (DEFAULTS TO TODAY) ---
+// --- RECENT SCANS & SPOOF ALERTS ---
 function onRecentScansScopeChange() {
   const scope = document.getElementById("recentScansScope").value;
   const dateInput = document.getElementById("recentScansDate");
@@ -182,13 +200,20 @@ function renderRecentScans() {
           scope === "all"
             ? `<span class="text-slate-500">${l.date_str} • </span>`
             : "";
+        const proofBtn = l.proof_image
+          ? `<button type="button" onclick="openProofModal('${l.proof_image}', '${l.full_name.replace(/'/g, "\\'")}', '${l.subject_code || l.subject} • ${l.date_str} ${l.time_str}')" title="View Capture Proof" class="p-1 rounded text-slate-400 hover:text-sky-300 hover:bg-slate-700/60 transition">${ICONS.photo}</button>`
+          : "";
+
         return `
       <div class="p-3 rounded-lg bg-slate-800/70 border border-slate-700/60 flex justify-between items-center gap-2">
         <div class="min-w-0">
           <p class="font-semibold text-slate-100 truncate">${l.full_name}</p>
           <p class="text-xs text-slate-400 truncate">${subjBadge} • ${datePrefix}${l.time_str}</p>
         </div>
-        <span class="px-2 py-0.5 rounded text-xs font-bold shrink-0 ${badgeClass(l.status)}">${l.status}</span>
+        <div class="flex items-center gap-1.5 shrink-0">
+          ${proofBtn}
+          <span class="px-2 py-0.5 rounded text-xs font-bold ${badgeClass(l.status)}">${l.status}</span>
+        </div>
       </div>
     `;
       })
@@ -196,11 +221,45 @@ function renderRecentScans() {
     `<p class="text-slate-500 text-xs py-6 text-center">${targetDate ? `No scans recorded on ${formatHumanDate(targetDate)}.` : "No scans recorded yet."}</p>`;
 }
 
+function renderSpoofAlerts() {
+  const panel = document.getElementById("spoofAlertPanel");
+  const list = document.getElementById("spoofAlertsList");
+  if (!panel || !list) return;
+
+  if (!cachedSpoofs || cachedSpoofs.length === 0) {
+    panel.classList.add("hidden");
+    return;
+  }
+
+  panel.classList.remove("hidden");
+  list.innerHTML = cachedSpoofs
+    .map(
+      (sp) => `
+    <div class="p-2.5 rounded-lg bg-slate-900/90 border border-rose-500/30 flex items-center justify-between gap-2">
+      <div class="min-w-0">
+        <p class="font-semibold text-rose-200 truncate">${sp.suspected_name}</p>
+        <p class="text-[11px] text-slate-400 truncate">${sp.source} • ${sp.date_str} ${sp.time_str}</p>
+      </div>
+      <button type="button" onclick="openProofModal('${sp.proof_image}', 'Spoof Attempt: ${sp.suspected_name.replace(/'/g, "\\'")}', '${sp.source} • Texture ${sp.texture_score} • ${sp.date_str} ${sp.time_str}')" class="shrink-0 px-2 py-1 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 font-semibold text-[11px] transition">
+        Inspect
+      </button>
+    </div>
+  `,
+    )
+    .join("");
+}
+
+async function clearSpoofAlerts() {
+  await fetch("/api/spoofs/clear", { method: "DELETE" });
+  loadDashboardData();
+}
+
 async function loadDashboardData() {
   const res = await fetch("/api/dashboard_data");
   const data = await res.json();
 
   cachedLogs = data.logs;
+  cachedSpoofs = data.spoofs || [];
   cachedStudents = data.students;
   cachedSchedules = [...data.schedules].sort((a, b) => {
     const dDiff =
@@ -262,6 +321,7 @@ async function loadDashboardData() {
   filterStuSel.value = prevFilterStu;
 
   renderRecentScans();
+  renderSpoofAlerts();
   refreshLogsDisplay();
   renderStudentsTable();
   renderDayGroupedSchedules();
@@ -304,7 +364,7 @@ function renderStudentsTable() {
     `<tr><td colspan="5" class="py-4 px-4 text-center text-xs text-slate-500">No enrolled students.</td></tr>`;
 }
 
-// --- DAY-GROUPED SCHEDULES WITH MULTI-COLOR PALETTE ---
+// --- DAY-GROUPED SCHEDULES ---
 function setScheduleDayFilter(day) {
   selectedScheduleDayFilter = day;
   const sel = document.getElementById("scheduleDayFilter");
@@ -397,7 +457,7 @@ function renderDayGroupedSchedules() {
     .join("");
 }
 
-// --- ATTENDANCE LOGS (DROPDOWN SCOPE, DEFAULTS TO TODAY) & CALENDAR ---
+// --- ATTENDANCE LOGS (WITH SINGLE LOG DELETE & PROOF PREVIEW) ---
 function onLogDateScopeChange() {
   const scope = document.getElementById("logDateScope").value;
   const dateInput = document.getElementById("filterDate");
@@ -504,6 +564,10 @@ function renderDayGroupedLogsTable(filteredLogs) {
           const codeBadge = l.subject_code
             ? `<span class="inline-block px-2 py-0.5 rounded font-mono text-xs font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 mr-2">${l.subject_code}</span>`
             : "";
+          const proofBtn = l.proof_image
+            ? `<button type="button" onclick="openProofModal('${l.proof_image}', '${l.full_name.replace(/'/g, "\\'")}', '${l.subject_code || l.subject} • ${l.date_str} ${l.time_str}')" title="View Capture Proof" class="p-1.5 rounded-lg text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition">${ICONS.photo}</button>`
+            : "";
+
           return `
         <tr class="hover:bg-slate-800/35 transition">
           <td class="py-2.5 px-4">
@@ -512,7 +576,15 @@ function renderDayGroupedLogsTable(filteredLogs) {
           </td>
           <td class="py-2.5 px-4 text-slate-200">${codeBadge}${l.subject}</td>
           <td class="py-2.5 px-4"><span class="px-2.5 py-0.5 rounded-full text-xs font-bold ${badgeClass(l.status)}">${l.status}</span></td>
-          <td class="py-2.5 px-4 font-mono text-xs text-slate-300 text-right">${l.time_str}</td>
+          <td class="py-2.5 px-4 font-mono text-xs text-slate-300">${l.time_str}</td>
+          <td class="py-2.5 px-4 text-right">
+            <div class="inline-flex items-center justify-end gap-1">
+              ${proofBtn}
+              <button type="button" onclick="deleteSingleLog(${l.id})" title="Delete This Log" aria-label="Delete This Log" class="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition">
+                ${ICONS.trash}
+              </button>
+            </div>
+          </td>
         </tr>
       `;
         })
@@ -531,7 +603,8 @@ function renderDayGroupedLogsTable(filteredLogs) {
                 <th class="py-2 px-4">Student</th>
                 <th class="py-2 px-4">Subject</th>
                 <th class="py-2 px-4">Status</th>
-                <th class="py-2 px-4 text-right">Time</th>
+                <th class="py-2 px-4">Time</th>
+                <th class="py-2 px-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-800/60">${rowsHtml}</tbody>
@@ -541,6 +614,12 @@ function renderDayGroupedLogsTable(filteredLogs) {
     `;
     })
     .join("");
+}
+
+async function deleteSingleLog(logId) {
+  if (!confirm("Delete this attendance record?")) return;
+  await fetch(`/api/logs/${logId}`, { method: "DELETE" });
+  loadDashboardData();
 }
 
 function renderAttendanceCalendar(filteredLogs) {
@@ -676,9 +755,12 @@ function inspectCalendarDate(dateKey) {
             <span class="font-semibold text-slate-100">${l.full_name}</span>
             <span class="font-mono text-indigo-300 ml-1.5">${l.subject_code || l.subject}</span>
           </div>
-          <div class="flex items-center gap-2 shrink-0">
+          <div class="flex items-center gap-1.5 shrink-0">
             <span class="px-2 py-0.5 rounded text-[10px] font-bold ${badgeClass(l.status)}">${l.status}</span>
             <span class="font-mono text-[11px] text-slate-400">${l.time_str}</span>
+            <button type="button" onclick="deleteSingleLog(${l.id})" title="Delete This Log" class="p-1 rounded text-slate-400 hover:text-rose-400 transition">
+              ${ICONS.trash}
+            </button>
           </div>
         </div>
       `,
@@ -724,7 +806,7 @@ function badgeClass(status) {
   return "bg-rose-500/20 text-rose-400";
 }
 
-// --- STUDENT FORM & CRUD (TOGGLEABLE EDIT & REFINED DARK PALETTE) ---
+// --- STUDENT FORM & CRUD ---
 function toggleEditStudent(studentId) {
   if (editingStudentOriginalId === studentId) {
     resetStudentForm();
@@ -843,7 +925,7 @@ async function deleteStudent(id) {
   loadDashboardData();
 }
 
-// --- SCHEDULE FORM & CRUD (TOGGLEABLE EDIT & REFINED DARK PALETTE) ---
+// --- SCHEDULE FORM & CRUD ---
 function toggleEditSchedule(schedId) {
   if (editingScheduleId === schedId) {
     resetScheduleForm();
