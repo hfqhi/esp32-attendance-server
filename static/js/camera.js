@@ -367,11 +367,13 @@ async function toggleScanner() {
     const image = await captureCurrentFrameBase64("kiosk");
     if (!image) return;
 
+    const cameraSource = selectedCameraId === "esp32" ? "esp32" : "webcam";
     const res = await fetch("/api/verify_frame", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         image,
+        source: cameraSource,
         override_subject: document.getElementById("overrideSubject").value,
       }),
     });

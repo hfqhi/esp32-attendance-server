@@ -5,6 +5,7 @@ let cachedSchedules = [];
 let editingStudentOriginalId = null;
 let editingScheduleId = null;
 let selectedScheduleDayFilter = "ALL";
+let recentScansInitialized = false;
 
 let logViewMode = "table";
 let calYear = new Date().getFullYear();
@@ -90,6 +91,64 @@ function switchTab(tab) {
   loadDashboardData();
 }
 
+// --- DAY-FILTERED RECENT SCANS ---
+function toggleRecentScansDateMode() {
+  const dateInput = document.getElementById("recentScansDate");
+  const todayStr = getTodayDateString();
+  dateInput.value = dateInput.value === todayStr ? "" : todayStr;
+  renderRecentScans();
+}
+
+function renderRecentScans() {
+  const dateInput = document.getElementById("recentScansDate");
+  const toggleBtn = document.getElementById("recentScansTodayBtn");
+  const countBadge = document.getElementById("recentScansCountBadge");
+  const recentFeed = document.getElementById("recentFeed");
+  if (!dateInput || !recentFeed) return;
+
+  const todayStr = getTodayDateString();
+  if (!recentScansInitialized) {
+    dateInput.value = todayStr;
+    recentScansInitialized = true;
+  }
+
+  const selectedDate = dateInput.value;
+  if (selectedDate === todayStr) {
+    toggleBtn.textContent = "All Days";
+    toggleBtn.className =
+      "bg-emerald-600/20 border border-emerald-500/50 text-emerald-300 text-[11px] font-semibold px-2 py-1 rounded-lg transition";
+  } else {
+    toggleBtn.textContent = "Today";
+    toggleBtn.className =
+      "bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-[11px] font-semibold px-2 py-1 rounded-lg transition";
+  }
+
+  const dayFiltered = selectedDate
+    ? cachedLogs.filter((l) => l.date_str === selectedDate)
+    : cachedLogs;
+
+  countBadge.textContent = dayFiltered.length;
+
+  recentFeed.innerHTML =
+    dayFiltered
+      .slice(0, 15)
+      .map((l) => {
+        const subjDisplay = l.subject_code || l.subject;
+        const dateTag = selectedDate ? "" : `${l.date_str} • `;
+        return `
+      <div class="p-3 rounded-lg bg-slate-800/70 border border-slate-700/60 flex justify-between items-center">
+        <div class="min-w-0 pr-2">
+          <p class="font-semibold text-slate-100 truncate">${l.full_name}</p>
+          <p class="text-xs text-slate-400 truncate">${subjDisplay} • ${dateTag}${l.time_str}</p>
+        </div>
+        <span class="px-2 py-0.5 rounded text-xs font-bold shrink-0 ${badgeClass(l.status)}">${l.status}</span>
+      </div>
+    `;
+      })
+      .join("") ||
+    `<p class="text-slate-500 text-xs py-4 text-center">${selectedDate ? `No scans recorded on ${formatHumanDate(selectedDate)}.` : "No scans recorded yet."}</p>`;
+}
+
 async function loadDashboardData() {
   const res = await fetch("/api/dashboard_data");
   const data = await res.json();
@@ -155,24 +214,7 @@ async function loadDashboardData() {
   filterSubSel.value = prevFilterSub;
   filterStuSel.value = prevFilterStu;
 
-  const recentFeed = document.getElementById("recentFeed");
-  recentFeed.innerHTML =
-    cachedLogs
-      .slice(0, 8)
-      .map((l) => {
-        const subjDisplay = l.subject_code || l.subject;
-        return `
-      <div class="p-3 rounded-lg bg-slate-800/70 border border-slate-700/60 flex justify-between items-center">
-        <div>
-          <p class="font-semibold text-slate-100">${l.full_name}</p>
-          <p class="text-xs text-slate-400">${subjDisplay} • ${l.time_str}</p>
-        </div>
-        <span class="px-2 py-0.5 rounded text-xs font-bold ${badgeClass(l.status)}">${l.status}</span>
-      </div>
-    `;
-      })
-      .join("") || `<p class="text-slate-500 text-xs">No scans yet.</p>`;
-
+  renderRecentScans();
   refreshLogsDisplay();
 
   document.getElementById("studentsTableBody").innerHTML =
