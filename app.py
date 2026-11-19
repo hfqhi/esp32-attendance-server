@@ -173,6 +173,7 @@ def enroll_student():
     full_name = " ".join(data.get("full_name", "").split())
     section = data.get("section", "CPE-3B").strip() or "CPE-3B"
     image_data = data.get("image", "")
+    camera_source = data.get("source", "webcam")
 
     if not student_id or not full_name or not image_data:
         return jsonify({"success": False, "message": "Student ID, Name, and Photo are required."}), 400
@@ -187,7 +188,7 @@ def enroll_student():
         return jsonify({"success": False, "message": f"'{full_name}' is already enrolled."}), 409
     conn.close()
 
-    feature, err = extract_face_feature(image_data)
+    feature, err = extract_face_feature(image_data, source=camera_source)
     if err:
         return jsonify({"success": False, "message": err}), 400
 
@@ -214,6 +215,7 @@ def update_student(original_id):
     full_name = " ".join(data.get("full_name", "").split())
     section = data.get("section", "CPE-3B").strip() or "CPE-3B"
     image_data = data.get("image", "")
+    camera_source = data.get("source", "webcam")
 
     if not new_id or not full_name:
         return jsonify({"success": False, "message": "Student ID and Full Name are required."}), 400
@@ -236,7 +238,7 @@ def update_student(original_id):
     old_emb_path = os.path.join("enrolled_faces", emb_filename)
 
     if image_data:
-        feature, err = extract_face_feature(image_data, exclude_student_id=original_id)
+        feature, err = extract_face_feature(image_data, exclude_student_id=original_id, source=camera_source)
         if err:
             conn.close()
             return jsonify({"success": False, "message": err}), 400

@@ -25,12 +25,17 @@ for path, url in MODELS.items():
         print(f"Downloading {path}...")
         urllib.request.urlretrieve(url, path)
 
-detector = cv2.FaceDetectorYN.create(YUNET_PATH, "", (320, 320), 0.9, 0.3, 5000)
+# Slightly lower detection confidence (0.82) handles indoor OV2640 sensor frames reliably
+detector = cv2.FaceDetectorYN.create(YUNET_PATH, "", (320, 320), 0.82, 0.3, 5000)
 recognizer = cv2.FaceRecognizerSF.create(SFACE_PATH, "")
 
-COSINE_THRESHOLD = 0.363
+COSINE_THRESHOLDS = {
+    "esp32": 0.325,
+    "webcam": 0.363,
+}
+
 TEXTURE_THRESHOLDS = {
-    "esp32": 14.0,
+    "esp32": 12.0,
     "webcam": 32.0,
 }
 
@@ -52,6 +57,19 @@ def decode_image(data_url_or_bytes):
         img_bytes = data_url_or_bytes
     np_arr = np.frombuffer(img_bytes, np.uint8)
     return cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+
+def enhance_indoor_frame(frame, source="webcam"):
+    """Applies LAB-space CLAHE luminance normalization so indoor ESP32-CAM frames match clearly without a flashlight."""
+    if frame is None or source != "esp32":
+        return frame
+
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    l_chan, a_chan, b_chan = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.8, tileGridSize=(8, 8))
+    l_eq = clahe.apply(l_chan)
+    enhanced = cv2.cvtColor(cv2.merge((l_eq, a_chan, b_chan)), cv2.COLOR_LAB2BGR)
+    return enhanced
 
 
 def save_reference_portrait(image_data, student_id, full_name):
@@ -84,11 +102,12 @@ def get_enrolled_embeddings():
     return records
 
 
-def extract_face_feature(image_data, exclude_student_id=None):
-    frame = decode_image(image_data)
-    if frame is None:
+def extract_face_feature(image_data, exclude_student_id=None, source="webcam"):
+    raw_frame = decode_image(image_data)
+    if raw_frame is None:
         return None, "Invalid image data."
 
+    frame = enhance_indoor_frame(raw_frame, source=source)
     h, w, _ = frame.shape
     detector.setInputSize((w, h))
     _, faces = detector.detect(frame)
@@ -101,12 +120,13 @@ def extract_face_feature(image_data, exclude_student_id=None):
 
     aligned = recognizer.alignCrop(frame, faces[0])
     feature = recognizer.feature(aligned)
+    cosine_thresh = COSINE_THRESHOLDS.get(source, COSINE_THRESHOLDS["webcam"])
 
     for stu in get_enrolled_embeddings():
         if exclude_student_id and stu["student_id"].lower() == exclude_student_id.lower():
             continue
         score = recognizer.match(feature, stu["embedding"], cv2.FaceRecognizerSF_FR_COSINE)
-        if score >= COSINE_THRESHOLD:
+        if score >= cosine_thresh:
             return None, f"Duplicate face detected: already registered as {stu['full_name']} ({stu['student_id']})."
 
     return feature, None
@@ -129,7 +149,7 @@ def analyze_liveness(frame, face):
     return texture, smile_ratio, yaw_ratio
 
 
-def match_best_student(frame):
+def match_best_student(frame, source="webcam"):
     h, w, _ = frame.shape
     detector.setInputSize((w, h))
     _, faces = detector.detect(frame)
@@ -140,6 +160,7 @@ def match_best_student(frame):
     face = faces[0]
     aligned = recognizer.alignCrop(frame, face)
     feature = recognizer.feature(aligned)
+    cosine_thresh = COSINE_THRESHOLDS.get(source, COSINE_THRESHOLDS["webcam"])
 
     best_student = None
     best_score = 0.0
@@ -147,7 +168,7 @@ def match_best_student(frame):
         score = recognizer.match(feature, stu["embedding"], cv2.FaceRecognizerSF_FR_COSINE)
         if score > best_score:
             best_score = score
-            if score >= COSINE_THRESHOLD:
+            if score >= cosine_thresh:
                 best_student = stu
 
     return face, best_student
@@ -155,19 +176,21 @@ def match_best_student(frame):
 
 def identify_offline_face(image_bytes):
     """Matches a single queued offline JPEG without requiring interactive challenge."""
-    frame = decode_image(image_bytes)
-    if frame is None:
+    raw_frame = decode_image(image_bytes)
+    if raw_frame is None:
         return None
-    _, best_student = match_best_student(frame)
+    frame = enhance_indoor_frame(raw_frame, source="esp32")
+    _, best_student = match_best_student(frame, source="esp32")
     return best_student
 
 
 def verify_and_check_liveness(image_data, source="webcam"):
-    frame = decode_image(image_data)
-    if frame is None:
+    raw_frame = decode_image(image_data)
+    if raw_frame is None:
         return {"status": "ERROR", "message": "Invalid camera frame"}, None
 
-    face, best_student = match_best_student(frame)
+    frame = enhance_indoor_frame(raw_frame, source=source)
+    face, best_student = match_best_student(frame, source=source)
     if face is None:
         liveness_state["student_id"] = None
         return {"status": "NO_FACE", "message": "Ready to Scan"}, None
