@@ -5,7 +5,6 @@ let cachedSchedules = [];
 let editingStudentOriginalId = null;
 let editingScheduleId = null;
 let selectedScheduleDayFilter = "ALL";
-let recentScansInitialized = false;
 
 let logViewMode = "table";
 let calYear = new Date().getFullYear();
@@ -30,6 +29,44 @@ const DAY_ORDER = {
   Sunday: 7,
 };
 
+const DAY_ACCENTS = {
+  Monday: {
+    header: "bg-sky-950/50 border-sky-800/60",
+    title: "text-sky-300",
+    badge: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+  },
+  Tuesday: {
+    header: "bg-violet-950/50 border-violet-800/60",
+    title: "text-violet-300",
+    badge: "bg-violet-500/15 text-violet-300 border-violet-500/30",
+  },
+  Wednesday: {
+    header: "bg-cyan-950/50 border-cyan-800/60",
+    title: "text-cyan-300",
+    badge: "bg-cyan-500/15 text-cyan-300 border-cyan-500/30",
+  },
+  Thursday: {
+    header: "bg-amber-950/45 border-amber-800/60",
+    title: "text-amber-300",
+    badge: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+  },
+  Friday: {
+    header: "bg-rose-950/45 border-rose-800/60",
+    title: "text-rose-300",
+    badge: "bg-rose-500/15 text-rose-300 border-rose-500/30",
+  },
+  Saturday: {
+    header: "bg-indigo-950/50 border-indigo-800/60",
+    title: "text-indigo-300",
+    badge: "bg-indigo-500/15 text-indigo-300 border-indigo-500/30",
+  },
+  Sunday: {
+    header: "bg-slate-800/70 border-slate-700",
+    title: "text-slate-200",
+    badge: "bg-slate-700/60 text-slate-300 border-slate-600",
+  },
+};
+
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeManageModal();
 });
@@ -44,6 +81,12 @@ function closeManageModal() {
 
 function getTodayDateString() {
   return new Date().toLocaleDateString("en-CA");
+}
+
+function getYesterdayDateString() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return d.toLocaleDateString("en-CA");
 }
 
 function formatHumanDate(yyyyMmDd) {
@@ -65,7 +108,6 @@ setInterval(() => {
     `${dayName} • ${now.toLocaleTimeString()}`;
 }, 1000);
 
-// Auto-refresh dashboard data every 10s to keep ESP32 connection state updated
 setInterval(loadDashboardData, 10000);
 
 function format12Hour(time24) {
@@ -83,70 +125,69 @@ function switchTab(tab) {
   ["kiosk", "logs", "enroll", "schedules"].forEach((t) => {
     document.getElementById(`view-${t}`).classList.toggle("hidden", t !== tab);
     const btn = document.getElementById(`tab-${t}`);
-    btn.classList.toggle("border-emerald-400", t === tab);
-    btn.classList.toggle("text-emerald-400", t === tab);
+    btn.classList.toggle("border-sky-400", t === tab);
+    btn.classList.toggle("text-sky-400", t === tab);
     btn.classList.toggle("border-transparent", t !== tab);
     btn.classList.toggle("text-slate-400", t !== tab);
   });
   loadDashboardData();
 }
 
-// --- DAY-FILTERED RECENT SCANS ---
-function toggleRecentScansDateMode() {
+// --- DROPDOWN-FILTERED RECENT SCANS (DEFAULTS TO TODAY) ---
+function onRecentScansScopeChange() {
+  const scope = document.getElementById("recentScansScope").value;
   const dateInput = document.getElementById("recentScansDate");
-  const todayStr = getTodayDateString();
-  dateInput.value = dateInput.value === todayStr ? "" : todayStr;
+  if (scope === "custom") {
+    if (!dateInput.value) dateInput.value = getTodayDateString();
+    dateInput.classList.remove("hidden");
+  } else {
+    dateInput.classList.add("hidden");
+  }
   renderRecentScans();
 }
 
 function renderRecentScans() {
+  const scopeEl = document.getElementById("recentScansScope");
   const dateInput = document.getElementById("recentScansDate");
-  const toggleBtn = document.getElementById("recentScansTodayBtn");
   const countBadge = document.getElementById("recentScansCountBadge");
   const recentFeed = document.getElementById("recentFeed");
-  if (!dateInput || !recentFeed) return;
+  if (!scopeEl || !recentFeed) return;
 
-  const todayStr = getTodayDateString();
-  if (!recentScansInitialized) {
-    dateInput.value = todayStr;
-    recentScansInitialized = true;
-  }
+  const scope = scopeEl.value;
+  let targetDate = "";
+  if (scope === "today") targetDate = getTodayDateString();
+  else if (scope === "yesterday") targetDate = getYesterdayDateString();
+  else if (scope === "custom") targetDate = dateInput.value;
 
-  const selectedDate = dateInput.value;
-  if (selectedDate === todayStr) {
-    toggleBtn.textContent = "All Days";
-    toggleBtn.className =
-      "bg-emerald-600/20 border border-emerald-500/50 text-emerald-300 text-[11px] font-semibold px-2 py-1 rounded-lg transition";
-  } else {
-    toggleBtn.textContent = "Today";
-    toggleBtn.className =
-      "bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-[11px] font-semibold px-2 py-1 rounded-lg transition";
-  }
-
-  const dayFiltered = selectedDate
-    ? cachedLogs.filter((l) => l.date_str === selectedDate)
+  const filtered = targetDate
+    ? cachedLogs.filter((l) => l.date_str === targetDate)
     : cachedLogs;
 
-  countBadge.textContent = dayFiltered.length;
+  countBadge.textContent = filtered.length;
 
   recentFeed.innerHTML =
-    dayFiltered
+    filtered
       .slice(0, 15)
       .map((l) => {
-        const subjDisplay = l.subject_code || l.subject;
-        const dateTag = selectedDate ? "" : `${l.date_str} • `;
+        const subjBadge = l.subject_code
+          ? `<span class="font-mono text-[11px] font-semibold text-indigo-300">${l.subject_code}</span>`
+          : `<span class="text-xs text-slate-300">${l.subject}</span>`;
+        const datePrefix =
+          scope === "all"
+            ? `<span class="text-slate-500">${l.date_str} • </span>`
+            : "";
         return `
-      <div class="p-3 rounded-lg bg-slate-800/70 border border-slate-700/60 flex justify-between items-center">
-        <div class="min-w-0 pr-2">
+      <div class="p-3 rounded-lg bg-slate-800/70 border border-slate-700/60 flex justify-between items-center gap-2">
+        <div class="min-w-0">
           <p class="font-semibold text-slate-100 truncate">${l.full_name}</p>
-          <p class="text-xs text-slate-400 truncate">${subjDisplay} • ${dateTag}${l.time_str}</p>
+          <p class="text-xs text-slate-400 truncate">${subjBadge} • ${datePrefix}${l.time_str}</p>
         </div>
         <span class="px-2 py-0.5 rounded text-xs font-bold shrink-0 ${badgeClass(l.status)}">${l.status}</span>
       </div>
     `;
       })
       .join("") ||
-    `<p class="text-slate-500 text-xs py-4 text-center">${selectedDate ? `No scans recorded on ${formatHumanDate(selectedDate)}.` : "No scans recorded yet."}</p>`;
+    `<p class="text-slate-500 text-xs py-6 text-center">${targetDate ? `No scans recorded on ${formatHumanDate(targetDate)}.` : "No scans recorded yet."}</p>`;
 }
 
 async function loadDashboardData() {
@@ -216,39 +257,41 @@ async function loadDashboardData() {
 
   renderRecentScans();
   refreshLogsDisplay();
-
-  document.getElementById("studentsTableBody").innerHTML =
-    cachedStudents
-      .map(
-        (s) => `
-    <tr>
-      <td class="py-3 px-4 font-mono text-xs">${s.student_id}</td>
-      <td class="py-3 px-4 font-medium">${s.full_name}</td>
-      <td class="py-3 px-4 text-slate-400">${s.section}</td>
-      <td class="py-3 px-4 text-xs text-slate-400">${s.created_at}</td>
-      <td class="py-3 px-4 text-right space-x-2">
-        <button onclick="openStudentCalendar('${s.student_id}')" class="text-cyan-400 hover:text-cyan-300 text-xs">Calendar</button>
-        <button onclick="startEditStudent('${s.student_id}')" class="text-amber-400 hover:text-amber-300 text-xs">Edit</button>
-        <button onclick="deleteStudent('${s.student_id}')" class="text-rose-400 hover:text-rose-300 text-xs">Remove</button>
-      </td>
-    </tr>
-  `,
-      )
-      .join("") ||
-    `<tr><td colspan="5" class="py-4 px-4 text-center text-xs text-slate-500">No enrolled students.</td></tr>`;
-
+  renderStudentsTable();
   renderDayGroupedSchedules();
 }
 
-// --- DAY-GROUPED SCHEDULES ---
+function renderStudentsTable() {
+  document.getElementById("studentsTableBody").innerHTML =
+    cachedStudents
+      .map((s) => {
+        const isEditing = editingStudentOriginalId === s.student_id;
+        const rowHighlight = isEditing
+          ? "bg-amber-500/10 border-l-2 border-l-amber-400"
+          : "hover:bg-slate-800/40";
+        return `
+      <tr class="${rowHighlight} transition">
+        <td class="py-3 px-4 font-mono text-xs text-sky-300">${s.student_id}</td>
+        <td class="py-3 px-4 font-medium text-slate-100">${s.full_name}</td>
+        <td class="py-3 px-4"><span class="px-2 py-0.5 rounded text-xs font-semibold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">${s.section}</span></td>
+        <td class="py-3 px-4 text-xs text-slate-400">${s.created_at}</td>
+        <td class="py-3 px-4 text-right space-x-2">
+          <button onclick="openStudentCalendar('${s.student_id}')" class="text-sky-400 hover:text-sky-300 text-xs font-medium">Calendar</button>
+          <button onclick="startEditStudent('${s.student_id}')" class="text-amber-400 hover:text-amber-300 text-xs font-medium">${isEditing ? "Editing..." : "Edit"}</button>
+          <button onclick="deleteStudent('${s.student_id}')" class="text-rose-400 hover:text-rose-300 text-xs font-medium">Remove</button>
+        </td>
+      </tr>
+    `;
+      })
+      .join("") ||
+    `<tr><td colspan="5" class="py-4 px-4 text-center text-xs text-slate-500">No enrolled students.</td></tr>`;
+}
+
+// --- DAY-GROUPED SCHEDULES WITH MULTI-COLOR PALETTE ---
 function setScheduleDayFilter(day) {
   selectedScheduleDayFilter = day;
-  document.querySelectorAll(".sched-day-btn").forEach((btn) => {
-    const active = btn.dataset.day === day;
-    btn.className = active
-      ? "sched-day-btn px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-600 text-white"
-      : "sched-day-btn px-3 py-1 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200";
-  });
+  const sel = document.getElementById("scheduleDayFilter");
+  if (sel) sel.value = day;
   renderDayGroupedSchedules();
 }
 
@@ -268,31 +311,42 @@ function renderDayGroupedSchedules() {
 
   container.innerHTML = daysToRender
     .map((day) => {
+      const accent = DAY_ACCENTS[day] || DAY_ACCENTS.Sunday;
       const dayItems = cachedSchedules.filter((s) => s.day_of_week === day);
       const rowsHtml =
         dayItems.length > 0
           ? dayItems
-              .map(
-                (s) => `
-          <tr class="hover:bg-slate-800/40 transition">
-            <td class="py-3 px-4 font-mono text-xs font-bold text-emerald-400 w-28">${s.subject_code || "—"}</td>
-            <td class="py-3 px-4 font-medium text-slate-100">${s.subject}</td>
-            <td class="py-3 px-4 font-mono text-xs text-slate-300">${format12Hour(s.start_time)} - ${format12Hour(s.end_time)}</td>
-            <td class="py-3 px-4 text-right space-x-2">
-              <button onclick="startEditSchedule(${s.id})" class="text-amber-400 hover:text-amber-300 text-xs">Edit</button>
-              <button onclick="deleteSchedule(${s.id})" class="text-rose-400 hover:text-rose-300 text-xs">Delete</button>
-            </td>
-          </tr>
-        `,
-              )
+              .map((s) => {
+                const isEditing = editingScheduleId === s.id;
+                const rowHighlight = isEditing
+                  ? "bg-amber-500/10 border-l-2 border-l-amber-400"
+                  : "hover:bg-slate-800/40";
+                return `
+            <tr class="${rowHighlight} transition">
+              <td class="py-3 px-4 w-32">
+                <span class="inline-block px-2.5 py-0.5 rounded-md font-mono text-xs font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+                  ${s.subject_code || "—"}
+                </span>
+              </td>
+              <td class="py-3 px-4 font-medium text-slate-100">${s.subject}</td>
+              <td class="py-3 px-4 font-mono text-xs text-slate-300">${format12Hour(s.start_time)} - ${format12Hour(s.end_time)}</td>
+              <td class="py-3 px-4 text-right space-x-2">
+                <button onclick="startEditSchedule(${s.id})" class="text-amber-400 hover:text-amber-300 text-xs font-medium">${isEditing ? "Editing..." : "Edit"}</button>
+                <button onclick="deleteSchedule(${s.id})" class="text-rose-400 hover:text-rose-300 text-xs font-medium">Delete</button>
+              </td>
+            </tr>
+          `;
+              })
               .join("")
           : `<tr><td colspan="4" class="py-4 px-4 text-center text-xs text-slate-500">No classes scheduled on ${day}.</td></tr>`;
 
       return `
       <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-        <div class="bg-slate-800/70 px-4 py-2.5 border-b border-slate-800 flex items-center justify-between">
-          <span class="text-sm font-bold text-emerald-400">${day}</span>
-          <span class="text-xs text-slate-400">${dayItems.length} class${dayItems.length === 1 ? "" : "es"}</span>
+        <div class="${accent.header} px-4 py-2.5 border-b flex items-center justify-between">
+          <span class="text-sm font-bold ${accent.title}">${day}</span>
+          <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold border ${accent.badge}">
+            ${dayItems.length} class${dayItems.length === 1 ? "" : "es"}
+          </span>
         </div>
         <div class="overflow-x-auto">
           <table class="w-full text-left text-sm">
@@ -313,30 +367,32 @@ function renderDayGroupedSchedules() {
     .join("");
 }
 
-// --- LOGS & CALENDAR ---
-function toggleTodayFilter() {
+// --- ATTENDANCE LOGS (DROPDOWN SCOPE, DEFAULTS TO TODAY) & CALENDAR ---
+function onLogDateScopeChange() {
+  const scope = document.getElementById("logDateScope").value;
   const dateInput = document.getElementById("filterDate");
-  const todayStr = getTodayDateString();
-  dateInput.value = dateInput.value === todayStr ? "" : todayStr;
+  if (scope === "custom") {
+    if (!dateInput.value) dateInput.value = getTodayDateString();
+    dateInput.classList.remove("hidden");
+  } else {
+    dateInput.classList.add("hidden");
+  }
   refreshLogsDisplay();
+}
+
+function getActiveLogDateFilter() {
+  const scopeEl = document.getElementById("logDateScope");
+  if (!scopeEl) return getTodayDateString();
+  const scope = scopeEl.value;
+  if (scope === "today") return getTodayDateString();
+  if (scope === "custom") return document.getElementById("filterDate").value;
+  return "";
 }
 
 function getFilteredLogs() {
   const stuFilter = document.getElementById("filterStudent").value;
   const subFilter = document.getElementById("filterSubject").value;
-  const dateFilter = document.getElementById("filterDate").value;
-  const todayStr = getTodayDateString();
-
-  const todayBtn = document.getElementById("todayFilterBtn");
-  todayBtn.className =
-    dateFilter === todayStr
-      ? "bg-emerald-600/20 border border-emerald-500/50 text-emerald-300 text-xs font-semibold px-2.5 py-1.5 rounded-lg transition"
-      : "bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs font-semibold px-2.5 py-1.5 rounded-lg transition";
-
-  const hasFilter = Boolean(stuFilter || subFilter || dateFilter);
-  document
-    .getElementById("resetFilterBtn")
-    .classList.toggle("hidden", !hasFilter);
+  const dateFilter = getActiveLogDateFilter();
 
   return cachedLogs.filter((l) => {
     if (stuFilter && l.student_id !== stuFilter) return false;
@@ -357,11 +413,11 @@ function setLogViewMode(mode) {
 
   document.getElementById("mode-table").className =
     mode === "table"
-      ? "px-3 py-1 text-xs font-semibold rounded-md bg-emerald-600 text-white"
+      ? "px-3 py-1 text-xs font-semibold rounded-md bg-sky-600 text-white"
       : "px-3 py-1 text-xs font-semibold rounded-md text-slate-400 hover:text-slate-200";
   document.getElementById("mode-calendar").className =
     mode === "calendar"
-      ? "px-3 py-1 text-xs font-semibold rounded-md bg-emerald-600 text-white"
+      ? "px-3 py-1 text-xs font-semibold rounded-md bg-sky-600 text-white"
       : "px-3 py-1 text-xs font-semibold rounded-md text-slate-400 hover:text-slate-200";
 
   refreshLogsDisplay();
@@ -382,7 +438,7 @@ function refreshLogsDisplay() {
 
   const stuFilter = document.getElementById("filterStudent").value;
   const subFilter = document.getElementById("filterSubject").value;
-  const dateFilter = document.getElementById("filterDate").value;
+  const dateFilter = getActiveLogDateFilter();
   const params = new URLSearchParams();
   if (stuFilter) params.append("student_id", stuFilter);
   if (subFilter) params.append("subject", subFilter);
@@ -399,7 +455,8 @@ function refreshLogsDisplay() {
 function renderDayGroupedLogsTable(filteredLogs) {
   const container = document.getElementById("logsTableContainer");
   if (filteredLogs.length === 0) {
-    container.innerHTML = `<div class="py-8 text-center text-xs text-slate-500">No attendance records found.</div>`;
+    const activeDate = getActiveLogDateFilter();
+    container.innerHTML = `<div class="py-8 text-center text-xs text-slate-500">${activeDate ? `No attendance records found for ${formatHumanDate(activeDate)}.` : "No attendance records found."}</div>`;
     return;
   }
 
@@ -415,7 +472,7 @@ function renderDayGroupedLogsTable(filteredLogs) {
       const rowsHtml = dayLogs
         .map((l) => {
           const codeBadge = l.subject_code
-            ? `<span class="font-mono text-xs font-bold text-emerald-400 mr-2">${l.subject_code}</span>`
+            ? `<span class="inline-block px-2 py-0.5 rounded font-mono text-xs font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 mr-2">${l.subject_code}</span>`
             : "";
           return `
         <tr class="hover:bg-slate-800/35 transition">
@@ -434,7 +491,7 @@ function renderDayGroupedLogsTable(filteredLogs) {
       return `
       <div class="border border-slate-800 rounded-xl overflow-hidden">
         <div class="bg-slate-800/60 px-4 py-2 border-b border-slate-800 flex items-center justify-between">
-          <span class="text-xs font-bold text-slate-200">${formatHumanDate(dateKey)}</span>
+          <span class="text-xs font-bold text-sky-300">${formatHumanDate(dateKey)}</span>
           <span class="text-[11px] text-slate-400">${dayLogs.length} record${dayLogs.length === 1 ? "" : "s"}</span>
         </div>
         <div class="overflow-x-auto">
@@ -474,8 +531,19 @@ function renderAttendanceCalendar(filteredLogs) {
   document.getElementById("calendarMonthLabel").textContent =
     `${monthNames[calMonth]} ${calYear}`;
 
+  const calendarSourceLogs =
+    document.getElementById("logDateScope").value === "today"
+      ? cachedLogs.filter((l) => {
+          const stuFilter = document.getElementById("filterStudent").value;
+          const subFilter = document.getElementById("filterSubject").value;
+          if (stuFilter && l.student_id !== stuFilter) return false;
+          if (subFilter && l.subject !== subFilter) return false;
+          return true;
+        })
+      : filteredLogs;
+
   const logsByDate = {};
-  filteredLogs.forEach((l) => {
+  calendarSourceLogs.forEach((l) => {
     if (!logsByDate[l.date_str]) logsByDate[l.date_str] = [];
     logsByDate[l.date_str].push(l);
   });
@@ -535,7 +603,7 @@ function renderAttendanceCalendar(filteredLogs) {
       html += `
         <div onclick="inspectCalendarDate('${dateKey}')" class="min-h-[94px] p-1.5 border-r last:border-r-0 border-slate-800/80 cursor-pointer transition hover:bg-slate-800/50 ${inCurrentMonth ? "bg-slate-950/40" : "bg-slate-900/40 opacity-45"}">
           <div class="flex justify-between items-center mb-1">
-            <span class="text-xs font-semibold ${isToday ? "px-1.5 py-0.5 rounded bg-emerald-500 text-slate-950" : "text-slate-300"}">${cellDate.getDate()}</span>
+            <span class="text-xs font-semibold ${isToday ? "px-1.5 py-0.5 rounded bg-sky-500 text-slate-950" : "text-slate-300"}">${cellDate.getDate()}</span>
           </div>
           <div class="space-y-1">${barsHtml}${extraBadge}</div>
         </div>
@@ -548,7 +616,15 @@ function renderAttendanceCalendar(filteredLogs) {
 }
 
 function inspectCalendarDate(dateKey) {
-  const filtered = getFilteredLogs().filter((l) => l.date_str === dateKey);
+  const stuFilter = document.getElementById("filterStudent").value;
+  const subFilter = document.getElementById("filterSubject").value;
+  const filtered = cachedLogs.filter((l) => {
+    if (l.date_str !== dateKey) return false;
+    if (stuFilter && l.student_id !== stuFilter) return false;
+    if (subFilter && l.subject !== subFilter) return false;
+    return true;
+  });
+
   const detailBox = document.getElementById("calendarDayDetail");
 
   if (filtered.length === 0) {
@@ -558,7 +634,7 @@ function inspectCalendarDate(dateKey) {
 
   detailBox.innerHTML = `
     <div class="flex items-center justify-between mb-2.5">
-      <span class="font-bold text-slate-100">${formatHumanDate(dateKey)}</span>
+      <span class="font-bold text-sky-300">${formatHumanDate(dateKey)}</span>
       <span class="text-[11px] text-slate-400">${filtered.length} record${filtered.length > 1 ? "s" : ""}</span>
     </div>
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -568,7 +644,7 @@ function inspectCalendarDate(dateKey) {
         <div class="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-between gap-2">
           <div class="min-w-0 truncate">
             <span class="font-semibold text-slate-100">${l.full_name}</span>
-            <span class="font-mono text-emerald-400 ml-1.5">${l.subject_code || l.subject}</span>
+            <span class="font-mono text-indigo-300 ml-1.5">${l.subject_code || l.subject}</span>
           </div>
           <div class="flex items-center gap-2 shrink-0">
             <span class="px-2 py-0.5 rounded text-[10px] font-bold ${badgeClass(l.status)}">${l.status}</span>
@@ -605,16 +681,11 @@ function jumpCalendarToday() {
 function openStudentCalendar(studentId) {
   switchTab("logs");
   setTimeout(() => {
+    document.getElementById("logDateScope").value = "all";
+    document.getElementById("filterDate").classList.add("hidden");
     document.getElementById("filterStudent").value = studentId;
     setLogViewMode("calendar");
   }, 100);
-}
-
-function resetLogFilters() {
-  document.getElementById("filterStudent").value = "";
-  document.getElementById("filterSubject").value = "";
-  document.getElementById("filterDate").value = "";
-  refreshLogsDisplay();
 }
 
 function badgeClass(status) {
@@ -623,7 +694,7 @@ function badgeClass(status) {
   return "bg-rose-500/20 text-rose-400";
 }
 
-// --- STUDENT FORM & CRUD ---
+// --- STUDENT FORM & CRUD (DISTINCT EDIT MODE STYLING) ---
 function startEditStudent(studentId) {
   const student = cachedStudents.find((s) => s.student_id === studentId);
   if (!student) return;
@@ -632,16 +703,29 @@ function startEditStudent(studentId) {
   uploadedEnrollBase64 = null;
   stopEnrollStream();
 
+  const card = document.getElementById("enrollFormCard");
+  card.className =
+    "bg-amber-950/15 border-2 border-amber-500/70 rounded-xl p-5 transition-colors";
+
   document.getElementById("enrollFormTitle").textContent = "Edit Student";
+  document.getElementById("enrollFormTitle").className =
+    "text-base font-bold text-amber-300";
+  document.getElementById("enrollEditBadge").classList.remove("hidden");
   document.getElementById("cancelEditStudentBtn").classList.remove("hidden");
-  document.getElementById("enrollSubmitBtn").textContent = "Update Student";
+
+  const submitBtn = document.getElementById("enrollSubmitBtn");
+  submitBtn.textContent = "Save Changes";
+  submitBtn.className =
+    "w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold py-2 rounded-lg transition";
+
   document.getElementById("enrollId").value = student.student_id;
   document.getElementById("enrollName").value = student.full_name;
   document.getElementById("enrollSection").value = student.section;
   document.getElementById("enrollFeedback").textContent =
-    "Photo optional during edit.";
+    "Editing existing profile — new photo optional.";
   document.getElementById("enrollFeedback").className =
-    "text-xs text-center font-medium text-slate-400";
+    "text-xs text-center font-medium text-amber-300";
+  renderStudentsTable();
 }
 
 function resetStudentForm() {
@@ -649,14 +733,27 @@ function resetStudentForm() {
   uploadedEnrollBase64 = null;
   stopEnrollStream();
 
+  const card = document.getElementById("enrollFormCard");
+  card.className =
+    "bg-slate-900 border border-slate-800 rounded-xl p-5 transition-colors";
+
   document.getElementById("enrollFormTitle").textContent = "Enroll Student";
+  document.getElementById("enrollFormTitle").className =
+    "text-base font-semibold text-slate-100";
+  document.getElementById("enrollEditBadge").classList.add("hidden");
   document.getElementById("cancelEditStudentBtn").classList.add("hidden");
-  document.getElementById("enrollSubmitBtn").textContent = "Capture & Save";
+
+  const submitBtn = document.getElementById("enrollSubmitBtn");
+  submitBtn.textContent = "Capture & Save";
+  submitBtn.className =
+    "w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-lg transition";
+
   document.getElementById("enrollId").value = "";
   document.getElementById("enrollName").value = "";
   document.getElementById("enrollSection").value = "CPE-3B";
   document.getElementById("enrollFileInput").value = "";
   document.getElementById("enrollFeedback").textContent = "";
+  renderStudentsTable();
 }
 
 async function submitStudentForm() {
@@ -676,6 +773,7 @@ async function submitStudentForm() {
     return;
   }
 
+  const cameraSource = selectedCameraId === "esp32" ? "esp32" : "webcam";
   const url = editingStudentOriginalId
     ? `/api/students/${encodeURIComponent(editingStudentOriginalId)}`
     : "/api/enroll";
@@ -689,6 +787,7 @@ async function submitStudentForm() {
       full_name: document.getElementById("enrollName").value,
       section: document.getElementById("enrollSection").value,
       image: imageBase64,
+      source: cameraSource,
     }),
   });
   const data = await res.json();
@@ -711,33 +810,64 @@ async function deleteStudent(id) {
   loadDashboardData();
 }
 
-// --- SCHEDULE FORM & CRUD ---
+// --- SCHEDULE FORM & CRUD (DISTINCT EDIT MODE STYLING) ---
 function startEditSchedule(schedId) {
   const sched = cachedSchedules.find((s) => s.id === schedId);
   if (!sched) return;
 
   editingScheduleId = sched.id;
+
+  const card = document.getElementById("schedFormCard");
+  card.className =
+    "bg-amber-950/15 border-2 border-amber-500/70 rounded-xl p-5 self-start transition-colors";
+
   document.getElementById("schedFormTitle").textContent = "Edit Schedule";
+  document.getElementById("schedFormTitle").className =
+    "text-base font-bold text-amber-300";
+  document.getElementById("schedEditBadge").classList.remove("hidden");
   document.getElementById("cancelEditSchedBtn").classList.remove("hidden");
-  document.getElementById("schedSubmitBtn").textContent = "Update Schedule";
+
+  const submitBtn = document.getElementById("schedSubmitBtn");
+  submitBtn.textContent = "Save Changes";
+  submitBtn.className =
+    "w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold py-2 rounded-lg transition";
+
   document.getElementById("schedDay").value = sched.day_of_week;
   document.getElementById("schedCode").value = sched.subject_code || "";
   document.getElementById("schedSubject").value = sched.subject;
   document.getElementById("schedStart").value = sched.start_time;
   document.getElementById("schedEnd").value = sched.end_time;
-  document.getElementById("scheduleFeedback").textContent = "";
+  document.getElementById("scheduleFeedback").textContent =
+    `Editing ${sched.subject_code || sched.subject} (${sched.day_of_week}).`;
+  document.getElementById("scheduleFeedback").className =
+    "text-xs text-center font-medium text-amber-300";
+  renderDayGroupedSchedules();
 }
 
 function resetScheduleForm() {
   editingScheduleId = null;
+
+  const card = document.getElementById("schedFormCard");
+  card.className =
+    "bg-slate-900 border border-slate-800 rounded-xl p-5 self-start transition-colors";
+
   document.getElementById("schedFormTitle").textContent = "Add Schedule";
+  document.getElementById("schedFormTitle").className =
+    "text-base font-semibold text-slate-100";
+  document.getElementById("schedEditBadge").classList.add("hidden");
   document.getElementById("cancelEditSchedBtn").classList.add("hidden");
-  document.getElementById("schedSubmitBtn").textContent = "Save Schedule";
+
+  const submitBtn = document.getElementById("schedSubmitBtn");
+  submitBtn.textContent = "Save Schedule";
+  submitBtn.className =
+    "w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-lg transition";
+
   document.getElementById("schedCode").value = "";
   document.getElementById("schedSubject").value = "";
   document.getElementById("schedStart").value = "";
   document.getElementById("schedEnd").value = "";
   document.getElementById("scheduleFeedback").textContent = "";
+  renderDayGroupedSchedules();
 }
 
 async function submitScheduleForm() {

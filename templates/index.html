@@ -15,19 +15,25 @@
     <header
       class="bg-slate-900 border-b border-slate-800 px-6 py-3.5 flex flex-wrap items-center justify-between gap-3"
     >
-      <h1 class="text-lg font-bold text-emerald-400 tracking-tight">
-        ESP32-CAM Facial Attendance
-      </h1>
+      <div class="flex items-center gap-2.5">
+        <h1 class="text-lg font-bold text-slate-100 tracking-tight">
+          ESP32-CAM Facial Attendance
+        </h1>
+        <span
+          class="px-2 py-0.5 rounded text-[11px] font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30"
+          >CPE-3B</span
+        >
+      </div>
       <div class="flex items-center gap-2.5">
         <span
           id="activeClassBadge"
-          class="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+          class="px-3 py-1 rounded-full text-xs font-semibold bg-sky-500/15 text-sky-300 border border-sky-500/30"
         >
           Loading...
         </span>
         <span
           id="liveClock"
-          class="text-xs font-mono text-slate-300 bg-slate-800 px-3 py-1 rounded-lg"
+          class="text-xs font-mono text-slate-300 bg-slate-800 border border-slate-700/80 px-3 py-1 rounded-lg"
         ></span>
       </div>
     </header>
@@ -39,7 +45,7 @@
       <button
         onclick="switchTab('kiosk')"
         id="tab-kiosk"
-        class="py-3 border-b-2 border-emerald-400 text-emerald-400"
+        class="py-3 border-b-2 border-sky-400 text-sky-400"
       >
         Live Scanner
       </button>
@@ -164,7 +170,7 @@
                 class="hidden pointer-events-none absolute inset-0 flex items-center justify-center"
               >
                 <div
-                  class="w-48 h-60 border-2 border-dashed border-emerald-400/60 rounded-2xl"
+                  class="w-48 h-60 border-2 border-dashed border-sky-400/60 rounded-2xl"
                 ></div>
               </div>
 
@@ -179,7 +185,7 @@
                   id="kioskGrantPermBtn"
                   type="button"
                   onclick="requestCameraPermission('kiosk')"
-                  class="hidden bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition"
+                  class="hidden bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition"
                 >
                   Allow Camera Access
                 </button>
@@ -206,7 +212,7 @@
             </div>
           </div>
 
-          <!-- Recent Scans (Day-Filtered) -->
+          <!-- Recent Scans (Dropdown-Filtered, Defaults to Today) -->
           <div
             class="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col"
           >
@@ -215,28 +221,28 @@
                 <h2 class="text-base font-semibold">Recent Scans</h2>
                 <span
                   id="recentScansCountBadge"
-                  class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-800 text-slate-300 border border-slate-700"
+                  class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-sky-500/15 text-sky-300 border border-sky-500/30"
                 >
                   0
                 </span>
               </div>
-              <div class="flex items-center gap-1.5">
-                <input
-                  id="recentScansDate"
-                  type="date"
-                  onchange="renderRecentScans()"
-                  class="bg-slate-800 border border-slate-700 text-[11px] rounded-lg px-2 py-1 text-slate-200 max-w-[122px]"
-                />
-                <button
-                  id="recentScansTodayBtn"
-                  type="button"
-                  onclick="toggleRecentScansDateMode()"
-                  class="bg-emerald-600/20 border border-emerald-500/50 text-emerald-300 text-[11px] font-semibold px-2 py-1 rounded-lg transition"
-                >
-                  Today
-                </button>
-              </div>
+              <select
+                id="recentScansScope"
+                onchange="onRecentScansScopeChange()"
+                class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1 text-slate-200"
+              >
+                <option value="today">Today</option>
+                <option value="yesterday">Yesterday</option>
+                <option value="all">All Dates</option>
+                <option value="custom">Custom Date...</option>
+              </select>
             </div>
+            <input
+              id="recentScansDate"
+              type="date"
+              onchange="renderRecentScans()"
+              class="hidden mb-2.5 w-full bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1.5 text-slate-200"
+            />
             <div
               id="recentFeed"
               class="space-y-2 overflow-y-auto max-h-[420px] pr-1 text-sm"
@@ -293,7 +299,7 @@
                 <button
                   onclick="setLogViewMode('table')"
                   id="mode-table"
-                  class="px-3 py-1 text-xs font-semibold rounded-md bg-emerald-600 text-white"
+                  class="px-3 py-1 text-xs font-semibold rounded-md bg-sky-600 text-white"
                 >
                   Table
                 </button>
@@ -305,6 +311,23 @@
                   Calendar
                 </button>
               </div>
+
+              <select
+                id="logDateScope"
+                onchange="onLogDateScopeChange()"
+                class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1.5 text-slate-200"
+              >
+                <option value="today">Today</option>
+                <option value="all">All Dates</option>
+                <option value="custom">Custom Date...</option>
+              </select>
+
+              <input
+                id="filterDate"
+                type="date"
+                onchange="refreshLogsDisplay()"
+                class="hidden bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1 text-slate-200"
+              />
 
               <select
                 id="filterStudent"
@@ -321,37 +344,13 @@
               >
                 <option value="">All Subjects</option>
               </select>
-
-              <input
-                id="filterDate"
-                type="date"
-                onchange="refreshLogsDisplay()"
-                class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1 text-slate-200"
-              />
-
-              <button
-                id="todayFilterBtn"
-                type="button"
-                onclick="toggleTodayFilter()"
-                class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs font-semibold px-2.5 py-1.5 rounded-lg transition"
-              >
-                Today
-              </button>
-
-              <button
-                id="resetFilterBtn"
-                onclick="resetLogFilters()"
-                class="hidden text-xs text-slate-400 hover:text-slate-200 px-2 py-1"
-              >
-                Reset
-              </button>
             </div>
 
             <div class="flex items-center gap-2">
               <a
                 id="exportCsvBtn"
                 href="/api/export_csv"
-                class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3.5 py-1.5 rounded-lg transition whitespace-nowrap"
+                class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-3.5 py-1.5 rounded-lg transition whitespace-nowrap"
               >
                 Export CSV
               </a>
@@ -455,17 +454,28 @@
         id="view-enroll"
         class="hidden grid grid-cols-1 lg:grid-cols-3 gap-6"
       >
-        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <div
+          id="enrollFormCard"
+          class="bg-slate-900 border border-slate-800 rounded-xl p-5 transition-colors"
+        >
           <div class="flex items-center justify-between mb-4">
-            <h2 id="enrollFormTitle" class="text-base font-semibold">
-              Enroll Student
-            </h2>
+            <div class="flex items-center gap-2">
+              <h2 id="enrollFormTitle" class="text-base font-semibold">
+                Enroll Student
+              </h2>
+              <span
+                id="enrollEditBadge"
+                class="hidden px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40"
+              >
+                Editing
+              </span>
+            </div>
             <button
               id="cancelEditStudentBtn"
               onclick="resetStudentForm()"
-              class="hidden text-xs text-slate-400 hover:text-slate-200"
+              class="hidden text-xs font-semibold text-amber-300 hover:text-amber-200 px-2 py-1 rounded bg-amber-500/10 border border-amber-500/30"
             >
-              Cancel
+              Cancel Edit
             </button>
           </div>
 
@@ -521,7 +531,7 @@
                   id="enrollGrantPermBtn"
                   type="button"
                   onclick="requestCameraPermission('enroll')"
-                  class="hidden bg-cyan-600 hover:bg-cyan-500 text-white text-[11px] font-semibold px-3 py-1.5 rounded-lg transition"
+                  class="hidden bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-semibold px-3 py-1.5 rounded-lg transition"
                 >
                   Allow Camera Access
                 </button>
@@ -533,7 +543,7 @@
               id="enrollSubmitBtn"
               type="button"
               onclick="submitStudentForm()"
-              class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-lg"
+              class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-lg transition"
             >
               Capture & Save
             </button>
@@ -581,18 +591,27 @@
         class="hidden grid grid-cols-1 lg:grid-cols-3 gap-6"
       >
         <div
-          class="bg-slate-900 border border-slate-800 rounded-xl p-5 self-start"
+          id="schedFormCard"
+          class="bg-slate-900 border border-slate-800 rounded-xl p-5 self-start transition-colors"
         >
           <div class="flex items-center justify-between mb-4">
-            <h2 id="schedFormTitle" class="text-base font-semibold">
-              Add Schedule
-            </h2>
+            <div class="flex items-center gap-2">
+              <h2 id="schedFormTitle" class="text-base font-semibold">
+                Add Schedule
+              </h2>
+              <span
+                id="schedEditBadge"
+                class="hidden px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40"
+              >
+                Editing
+              </span>
+            </div>
             <button
               id="cancelEditSchedBtn"
               onclick="resetScheduleForm()"
-              class="hidden text-xs text-slate-400 hover:text-slate-200"
+              class="hidden text-xs font-semibold text-amber-300 hover:text-amber-200 px-2 py-1 rounded bg-amber-500/10 border border-amber-500/30"
             >
-              Cancel
+              Cancel Edit
             </button>
           </div>
 
@@ -643,7 +662,7 @@
             <button
               id="schedSubmitBtn"
               onclick="submitScheduleForm()"
-              class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-lg"
+              class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-lg transition"
             >
               Save Schedule
             </button>
@@ -656,58 +675,24 @@
 
         <div class="lg:col-span-2 space-y-4">
           <div
-            class="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-wrap items-center gap-1.5"
-            id="scheduleDayFilterBar"
+            class="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2"
           >
-            <button
-              onclick="setScheduleDayFilter('ALL')"
-              data-day="ALL"
-              class="sched-day-btn px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-600 text-white"
+            <span class="text-xs font-semibold text-slate-400 pl-1"
+              >Filter Day:</span
             >
-              All Days
-            </button>
-            <button
-              onclick="setScheduleDayFilter('Monday')"
-              data-day="Monday"
-              class="sched-day-btn px-3 py-1 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200"
+            <select
+              id="scheduleDayFilter"
+              onchange="setScheduleDayFilter(this.value)"
+              class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-3 py-1.5 text-slate-200"
             >
-              Mon
-            </button>
-            <button
-              onclick="setScheduleDayFilter('Tuesday')"
-              data-day="Tuesday"
-              class="sched-day-btn px-3 py-1 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200"
-            >
-              Tue
-            </button>
-            <button
-              onclick="setScheduleDayFilter('Wednesday')"
-              data-day="Wednesday"
-              class="sched-day-btn px-3 py-1 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200"
-            >
-              Wed
-            </button>
-            <button
-              onclick="setScheduleDayFilter('Thursday')"
-              data-day="Thursday"
-              class="sched-day-btn px-3 py-1 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200"
-            >
-              Thu
-            </button>
-            <button
-              onclick="setScheduleDayFilter('Friday')"
-              data-day="Friday"
-              class="sched-day-btn px-3 py-1 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200"
-            >
-              Fri
-            </button>
-            <button
-              onclick="setScheduleDayFilter('Saturday')"
-              data-day="Saturday"
-              class="sched-day-btn px-3 py-1 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200"
-            >
-              Sat
-            </button>
+              <option value="ALL">All Days</option>
+              <option value="Monday">Monday</option>
+              <option value="Tuesday">Tuesday</option>
+              <option value="Wednesday">Wednesday</option>
+              <option value="Thursday">Thursday</option>
+              <option value="Friday">Friday</option>
+              <option value="Saturday">Saturday</option>
+            </select>
           </div>
 
           <div id="schedulesByDayContainer" class="space-y-4"></div>
