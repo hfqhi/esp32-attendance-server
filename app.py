@@ -1,10 +1,7 @@
 import csv
 import io
-import json
 import os
-import socket
 import sqlite3
-import sys
 import time
 import urllib.request
 from datetime import datetime
@@ -33,22 +30,8 @@ init_db()
 
 esp32_node = {
     "ip": None,
-    "ssid": "",
-    "server_url": "",
     "last_seen": 0.0,
 }
-
-
-def get_local_lan_ip():
-    """Detects the laptop's active Wi-Fi IPv4 address for phone access."""
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.connect(("8.8.8.8", 80))
-        ip = sock.getsockname()[0]
-        sock.close()
-        return ip
-    except Exception:
-        return "127.0.0.1"
 
 
 def get_esp32_status():
@@ -56,22 +39,17 @@ def get_esp32_status():
     return {
         "online": online,
         "ip": esp32_node["ip"] if online else None,
-        "ssid": esp32_node["ssid"] if online else "",
-        "server_url": esp32_node["server_url"] if online else f"http://{get_local_lan_ip()}:5000",
         "stream_url": f"http://{esp32_node['ip']}:81/stream" if online else None,
         "capture_url": f"http://{esp32_node['ip']}/capture" if online else None,
     }
 
 
-def resolve_student_photo_url(student_id, full_name):
+def resolve_student_photo_url(student_id):
     safe_id = sanitize_slug(student_id)
-    safe_name = sanitize_slug(full_name)
-    exact = f"{safe_id}_{safe_name}.jpg"
-    if os.path.exists(os.path.join("enrolled_faces", exact)):
-        return f"/enrolled_portraits/{exact}"
-    for fname in os.listdir("enrolled_faces"):
-        if fname.startswith(f"{safe_id}_") and fname.lower().endswith(".jpg"):
-            return f"/enrolled_portraits/{fname}"
+    if os.path.isdir("enrolled_faces"):
+        for fname in sorted(os.listdir("enrolled_faces")):
+            if fname.startswith(f"{safe_id}_") and fname.lower().endswith(".jpg"):
+                return f"/api/esp32/portraits/{fname}"
     return ""
 
 
@@ -85,78 +63,14 @@ def serve_proof_image(filename):
     return send_from_directory("captured_proofs", filename)
 
 
-@app.route("/enrolled_portraits/<path:filename>", methods=["GET"])
-def serve_enrolled_portrait(filename):
-    return send_from_directory("enrolled_faces", filename)
-
-
 # --- ESP32-CAM DEVICE ENDPOINTS ---
 @app.route("/api/esp32/register", methods=["POST"])
 def register_esp32():
     data = request.json or {}
     ip_addr = data.get("ip") or request.remote_addr
     esp32_node["ip"] = ip_addr
-    esp32_node["ssid"] = data.get("ssid", esp32_node["ssid"])
-    esp32_node["server_url"] = data.get("server_url", esp32_node["server_url"])
     esp32_node["last_seen"] = time.time()
     return jsonify({"success": True, "ip": ip_addr, "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
-
-
-@app.route("/api/esp32/connect_ip", methods=["POST"])
-def connect_esp32_by_ip():
-    data = request.json or {}
-    target_ip = data.get("ip", "").strip().replace("http://", "").replace("https://", "").split("/")[0]
-    if not target_ip:
-        return jsonify({"success": False, "message": "Enter the ESP32-CAM IP address."}), 400
-
-    try:
-        with urllib.request.urlopen(f"http://{target_ip}/capture", timeout=3) as resp:
-            if resp.status == 200:
-                esp32_node["ip"] = target_ip
-                esp32_node["last_seen"] = time.time()
-                return jsonify({"success": True, "message": f"Connected to ESP32-CAM at {target_ip}."})
-    except Exception as exc:
-        return jsonify({"success": False, "message": f"Cannot reach http://{target_ip}: {exc}"}), 502
-
-    return jsonify({"success": False, "message": "ESP32-CAM did not respond."}), 502
-
-
-@app.route("/api/esp32/wifi_config", methods=["POST"])
-def configure_esp32_wifi():
-    data = request.json or {}
-    status = get_esp32_status()
-    target_ip = data.get("esp_ip", "").strip() or status["ip"]
-
-    if not target_ip:
-        return jsonify({
-            "success": False,
-            "message": "ESP32-CAM is offline. Connect to Wi-Fi 'ES-SEE-CAM-Setup' and open http://192.168.4.1"
-        }), 503
-
-    ssid = data.get("ssid", "").strip()
-    password = data.get("password", "")
-    server_url = data.get("server_url", "").strip() or f"http://{get_local_lan_ip()}:5000"
-
-    if not ssid:
-        return jsonify({"success": False, "message": "Wi-Fi SSID is required."}), 400
-
-    try:
-        payload = json.dumps({
-            "ssid": ssid,
-            "password": password,
-            "server_url": server_url,
-        }).encode("utf-8")
-        req = urllib.request.Request(
-            f"http://{target_ip}/wifi_config",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-        return jsonify(result)
-    except Exception as exc:
-        return jsonify({"success": False, "message": f"Failed to reach ESP32-CAM ({target_ip}): {exc}"}), 502
 
 
 @app.route("/api/esp32/proxy_capture", methods=["GET"])
@@ -234,9 +148,11 @@ def dashboard_data():
     auto_mark_ended_classes()
 
     conn = get_db()
-    raw_students = [dict(r) for r in conn.execute("SELECT * FROM students ORDER BY full_name").fetchall()]
-    for s in raw_students:
-        s["photo_url"] = resolve_student_photo_url(s["student_id"], s["full_name"])
+    students = []
+    for r in conn.execute("SELECT * FROM students ORDER BY full_name").fetchall():
+        stu_dict = dict(r)
+        stu_dict["photo_url"] = resolve_student_photo_url(stu_dict["student_id"])
+        students.append(stu_dict)
 
     schedules = [dict(r) for r in conn.execute("""
         SELECT * FROM schedules
@@ -257,15 +173,13 @@ def dashboard_data():
     active_code, active_subject, _ = get_active_schedule()
     today_name = datetime.now().strftime("%A")
     active_label = f"{active_code} • {active_subject}" if active_subject else f"No Active Class ({today_name})"
-    lan_ip = get_local_lan_ip()
 
     return jsonify({
-        "students": raw_students,
+        "students": students,
         "schedules": schedules,
         "logs": logs,
         "active_subject": active_label,
         "esp32": get_esp32_status(),
-        "mobile_url": f"http://{lan_ip}:5000",
     })
 
 
@@ -352,20 +266,27 @@ def update_student(original_id):
         if old_emb_path != new_emb_path and os.path.exists(old_emb_path):
             os.remove(old_emb_path)
         np.save(new_emb_path, feature)
+
+        old_safe_id = sanitize_slug(original_id)
+        for fname in os.listdir("enrolled_faces"):
+            if fname.startswith(f"{old_safe_id}_") and fname.endswith(".jpg"):
+                os.remove(os.path.join("enrolled_faces", fname))
         save_reference_portrait(image_data, new_id, full_name)
     elif new_id != original_id or full_name != current_row["full_name"]:
-        old_safe_id = sanitize_slug(original_id)
-        old_safe_name = sanitize_slug(current_row["full_name"])
-        old_jpg = os.path.join("enrolled_faces", f"{old_safe_id}_{old_safe_name}.jpg")
-        new_jpg = os.path.join("enrolled_faces", f"{sanitize_slug(new_id)}_{sanitize_slug(full_name)}.jpg")
-        if os.path.exists(old_jpg) and old_jpg != new_jpg:
-            os.rename(old_jpg, new_jpg)
-
         safe_id = "".join(c for c in new_id if c.isalnum() or c in ("-", "_"))
         emb_filename = f"{safe_id}.npy"
         new_emb_path = os.path.join("enrolled_faces", emb_filename)
         if os.path.exists(old_emb_path) and old_emb_path != new_emb_path:
             os.rename(old_emb_path, new_emb_path)
+
+        old_safe_id = sanitize_slug(original_id)
+        new_safe_name = sanitize_slug(full_name)
+        for fname in os.listdir("enrolled_faces"):
+            if fname.startswith(f"{old_safe_id}_") and fname.endswith(".jpg"):
+                os.rename(
+                    os.path.join("enrolled_faces", fname),
+                    os.path.join("enrolled_faces", f"{safe_id}_{new_safe_name}.jpg"),
+                )
 
     conn.execute("""
         UPDATE students
@@ -387,7 +308,7 @@ def delete_student(student_id):
         emb_path = os.path.join("enrolled_faces", row["embedding_file"])
         if os.path.exists(emb_path):
             os.remove(emb_path)
-        safe_id = "".join(c for c in student_id if c.isalnum() or c in ("-", "_"))
+        safe_id = sanitize_slug(student_id)
         for fname in os.listdir("enrolled_faces"):
             if fname.startswith(f"{safe_id}_") and fname.endswith(".jpg"):
                 os.remove(os.path.join("enrolled_faces", fname))
@@ -601,16 +522,4 @@ def export_csv():
 
 
 if __name__ == "__main__":
-    lan_ip = get_local_lan_ip()
-    use_https = "--https" in sys.argv
-    proto = "https" if use_https else "http"
-
-    print(f"\n=== ES-SEE Attendance System ===")
-    print(f"Desktop URL : {proto}://localhost:5000")
-    print(f"Phone URL   : {proto}://{lan_ip}:5000 (Connect phone to same Wi-Fi)")
-    print(f"ESP32 Server: http://{lan_ip}:5000\n")
-
-    if use_https:
-        app.run(host="0.0.0.0", port=5000, debug=True, ssl_context="adhoc")
-    else:
-        app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)
