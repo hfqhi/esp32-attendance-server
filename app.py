@@ -108,7 +108,7 @@ def sync_offline_capture():
     now_dt = datetime.now()
     date_str = now_dt.strftime("%Y-%m-%d")
     time_str = now_dt.strftime("%I:%M:%S %p")
-    proof_rel = save_proof_snapshot(raw_frame, student["full_name"], subject_code, is_spoof=False)
+    proof_rel = save_proof_snapshot(raw_frame, student["full_name"], subject_code)
 
     conn = get_db()
     try:
@@ -153,7 +153,6 @@ def dashboard_data():
         END, start_time ASC
     """).fetchall()]
     logs = [dict(r) for r in conn.execute("SELECT * FROM attendance_logs ORDER BY date_str DESC, id DESC").fetchall()]
-    spoofs = [dict(r) for r in conn.execute("SELECT * FROM spoof_attempts ORDER BY id DESC LIMIT 12").fetchall()]
     conn.close()
 
     active_code, active_subject, _ = get_active_schedule()
@@ -164,7 +163,6 @@ def dashboard_data():
         "students": students,
         "schedules": schedules,
         "logs": logs,
-        "spoofs": spoofs,
         "active_subject": active_label,
         "esp32": get_esp32_status(),
     })
@@ -373,24 +371,6 @@ def verify_frame():
 
     pending_response, verified_student, raw_frame = verify_instant_presence(raw_image, source=camera_source)
     if pending_response:
-        if pending_response.get("status") == "SPOOF" and raw_frame is not None:
-            now_dt = datetime.now()
-            spoof_rel = save_proof_snapshot(raw_frame, pending_response.get("student_name", "Unknown"), "SPOOF", is_spoof=True)
-            conn = get_db()
-            conn.execute("""
-                INSERT INTO spoof_attempts (suspected_name, source, texture_score, proof_image, date_str, time_str)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                pending_response.get("student_name", "Unknown"),
-                camera_source.upper(),
-                pending_response.get("texture_score", 0.0),
-                spoof_rel,
-                now_dt.strftime("%Y-%m-%d"),
-                now_dt.strftime("%I:%M:%S %p"),
-            ))
-            conn.commit()
-            conn.close()
-
         status_code = 400 if pending_response.get("status") == "ERROR" else 200
         return jsonify(pending_response), status_code
 
@@ -425,7 +405,7 @@ def verify_frame():
             "message": f"{verified_student['full_name']} • Already Logged ({display_subj})"
         })
 
-    proof_rel = save_proof_snapshot(raw_frame, verified_student["full_name"], subject_code, is_spoof=False)
+    proof_rel = save_proof_snapshot(raw_frame, verified_student["full_name"], subject_code)
     conn.execute("""
         INSERT INTO attendance_logs (student_id, full_name, subject_code, subject, status, date_str, time_str, proof_image)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -464,15 +444,6 @@ def clear_logs():
     conn.commit()
     conn.close()
     return jsonify({"success": True, "message": "All attendance logs cleared."})
-
-
-@app.route("/api/spoofs/clear", methods=["DELETE"])
-def clear_spoofs():
-    conn = get_db()
-    conn.execute("DELETE FROM spoof_attempts")
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True})
 
 
 @app.route("/api/export_csv", methods=["GET"])

@@ -61,13 +61,13 @@ def decode_image(data_url_or_bytes):
 
 
 def enhance_indoor_frame(frame, source="webcam"):
-    """Subtle luminance balancing that preserves true OV2640 colors for detection."""
+    """Luminance balancing that preserves true OV2640 colors for indoor detection."""
     if frame is None or source != "esp32":
         return frame
 
     lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
     l_chan, a_chan, b_chan = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
+    clahe = cv2.createCLAHE(clipLimit=1.8, tileGridSize=(8, 8))
     l_eq = clahe.apply(l_chan)
     return cv2.cvtColor(cv2.merge((l_eq, a_chan, b_chan)), cv2.COLOR_LAB2BGR)
 
@@ -84,8 +84,8 @@ def save_reference_portrait(image_data, student_id, full_name):
     return filename
 
 
-def save_proof_snapshot(frame, student_name, subject_code, is_spoof=False):
-    """Saves true-color attendance or spoof proof sorted by Day / Date / SubjectCode."""
+def save_proof_snapshot(frame, student_name, subject_code):
+    """Saves attendance proof sorted by Day / Date / SubjectCode."""
     if frame is None:
         return ""
     now = datetime.now()
@@ -93,11 +93,8 @@ def save_proof_snapshot(frame, student_name, subject_code, is_spoof=False):
     date_iso = now.strftime("%Y-%m-%d")
     time_slug = now.strftime("%I-%M-%S%p")
 
-    if is_spoof:
-        rel_dir = os.path.join("spoof_alerts", day_name, date_iso)
-    else:
-        subj_slug = sanitize_slug(subject_code or "General")
-        rel_dir = os.path.join(day_name, date_iso, subj_slug)
+    subj_slug = sanitize_slug(subject_code or "General")
+    rel_dir = os.path.join(day_name, date_iso, subj_slug)
 
     abs_dir = os.path.join("captured_proofs", rel_dir)
     os.makedirs(abs_dir, exist_ok=True)
@@ -227,9 +224,7 @@ def verify_instant_presence(image_data, source="webcam"):
     if texture < min_texture:
         return {
             "status": "SPOOF",
-            "student_name": best_student["full_name"],
-            "texture_score": round(texture, 1),
-            "message": f"Image/Screen Spoof Blocked ({best_student['full_name']})"
-        }, None, raw_frame
+            "message": "Flat Photo / Screen Blocked"
+        }, None, None
 
     return None, best_student, raw_frame

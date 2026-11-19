@@ -50,18 +50,6 @@ def init_db():
         )
     """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS spoof_attempts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            suspected_name TEXT NOT NULL,
-            source TEXT NOT NULL,
-            texture_score REAL NOT NULL,
-            proof_image TEXT NOT NULL,
-            date_str TEXT NOT NULL,
-            time_str TEXT NOT NULL
-        )
-    """)
-
     sched_cols = [r["name"] for r in cur.execute("PRAGMA table_info(schedules)").fetchall()]
     if "day_of_week" not in sched_cols:
         cur.execute("ALTER TABLE schedules ADD COLUMN day_of_week TEXT NOT NULL DEFAULT 'Monday'")
