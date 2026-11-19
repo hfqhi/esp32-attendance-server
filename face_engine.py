@@ -25,17 +25,16 @@ for path, url in MODELS.items():
         print(f"Downloading {path}...")
         urllib.request.urlretrieve(url, path)
 
-# Slightly lower detection confidence (0.82) handles indoor OV2640 sensor frames reliably
-detector = cv2.FaceDetectorYN.create(YUNET_PATH, "", (320, 320), 0.82, 0.3, 5000)
+detector = cv2.FaceDetectorYN.create(YUNET_PATH, "", (320, 320), 0.80, 0.3, 5000)
 recognizer = cv2.FaceRecognizerSF.create(SFACE_PATH, "")
 
 COSINE_THRESHOLDS = {
-    "esp32": 0.325,
+    "esp32": 0.285,
     "webcam": 0.363,
 }
 
 TEXTURE_THRESHOLDS = {
-    "esp32": 12.0,
+    "esp32": 11.0,
     "webcam": 32.0,
 }
 
@@ -45,6 +44,7 @@ liveness_state = {
     "baseline_smile": 0.0,
     "baseline_yaw": 1.0,
     "timestamp": 0.0,
+    "unknown_streak": 0,
 }
 
 
@@ -60,16 +60,16 @@ def decode_image(data_url_or_bytes):
 
 
 def enhance_indoor_frame(frame, source="webcam"):
-    """Applies LAB-space CLAHE luminance normalization so indoor ESP32-CAM frames match clearly without a flashlight."""
+    """Applies LAB-space CLAHE luminance normalization + bilateral denoising for indoor QVGA ESP32-CAM frames."""
     if frame is None or source != "esp32":
         return frame
 
     lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
     l_chan, a_chan, b_chan = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=2.8, tileGridSize=(8, 8))
+    clahe = cv2.createCLAHE(clipLimit=2.6, tileGridSize=(8, 8))
     l_eq = clahe.apply(l_chan)
     enhanced = cv2.cvtColor(cv2.merge((l_eq, a_chan, b_chan)), cv2.COLOR_LAB2BGR)
-    return enhanced
+    return cv2.bilateralFilter(enhanced, d=5, sigmaColor=35, sigmaSpace=35)
 
 
 def save_reference_portrait(image_data, student_id, full_name):
@@ -193,11 +193,18 @@ def verify_and_check_liveness(image_data, source="webcam"):
     face, best_student = match_best_student(frame, source=source)
     if face is None:
         liveness_state["student_id"] = None
+        liveness_state["unknown_streak"] = 0
         return {"status": "NO_FACE", "message": "Ready to Scan"}, None
 
     if not best_student:
+        liveness_state["unknown_streak"] += 1
+        # Debounce single-frame motion blur before declaring Unregistered Face
+        if liveness_state["unknown_streak"] < 2:
+            return {"status": "NO_FACE", "message": "Aligning Face..."}, None
         liveness_state["student_id"] = None
         return {"status": "UNKNOWN", "message": "Unregistered Face — Access Denied"}, None
+
+    liveness_state["unknown_streak"] = 0
 
     min_texture = TEXTURE_THRESHOLDS.get(source, TEXTURE_THRESHOLDS["webcam"])
     texture, smile_ratio, yaw_ratio = analyze_liveness(frame, face)
