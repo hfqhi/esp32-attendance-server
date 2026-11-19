@@ -1,6 +1,7 @@
 let cachedLogs = [];
 let cachedStudents = [];
 let cachedSchedules = [];
+let cachedMobileUrl = "";
 
 let editingStudentOriginalId = null;
 let editingScheduleId = null;
@@ -36,7 +37,6 @@ const ICONS = {
   photo: `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/></svg>`,
 };
 
-// Distinct per-day palette (Cobalt Blue Monday vs Emerald Green Wednesday)
 const DAY_ACCENTS = {
   Monday: {
     header: "bg-blue-950/55 border-blue-800/60",
@@ -78,20 +78,97 @@ const DAY_ACCENTS = {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     closeProofModal();
+    closeWifiConfigModal();
   }
 });
 
-function openProofModal(relPath, title, meta) {
-  if (!relPath) return;
-  document.getElementById("proofModalImg").src = `/proofs/${relPath}`;
+function openImagePreviewUrl(imageUrl, title, meta) {
+  if (!imageUrl) return;
+  document.getElementById("proofModalImg").src = imageUrl;
   document.getElementById("proofModalTitle").textContent = title;
   document.getElementById("proofModalMeta").textContent = meta;
   document.getElementById("proofModal").classList.remove("hidden");
 }
 
+function openProofModal(relPath, title, meta) {
+  if (!relPath) return;
+  openImagePreviewUrl(`/proofs/${relPath}`, title, meta);
+}
+
 function closeProofModal() {
   document.getElementById("proofModal").classList.add("hidden");
   document.getElementById("proofModalImg").src = "";
+}
+
+// --- ESP32-CAM WI-FI CONFIGURATION MODAL ---
+function openWifiConfigModal() {
+  const modal = document.getElementById("wifiConfigModal");
+  const statusEl = document.getElementById("wifiModalStatus");
+  const feedbackEl = document.getElementById("wifiConfigFeedback");
+  const ssidInput = document.getElementById("espWifiSsid");
+  const serverInput = document.getElementById("espServerUrl");
+
+  feedbackEl.textContent = "";
+  document.getElementById("espWifiPass").value = "";
+
+  if (typeof esp32Info !== "undefined" && esp32Info.online) {
+    statusEl.textContent = `Connected • IP ${esp32Info.ip}${esp32Info.ssid ? ` (${esp32Info.ssid})` : ""}`;
+    statusEl.className = "text-xs text-emerald-400 mt-0.5";
+    if (!ssidInput.value && esp32Info.ssid) ssidInput.value = esp32Info.ssid;
+  } else {
+    statusEl.textContent = "ESP32-CAM currently offline";
+    statusEl.className = "text-xs text-amber-400 mt-0.5";
+  }
+
+  serverInput.value =
+    typeof esp32Info !== "undefined" && esp32Info.server_url
+      ? esp32Info.server_url
+      : cachedMobileUrl || window.location.origin;
+
+  modal.classList.remove("hidden");
+}
+
+function closeWifiConfigModal() {
+  document.getElementById("wifiConfigModal").classList.add("hidden");
+}
+
+async function saveEsp32WifiConfig() {
+  const feedback = document.getElementById("wifiConfigFeedback");
+  const ssid = document.getElementById("espWifiSsid").value.trim();
+  const password = document.getElementById("espWifiPass").value;
+  const serverUrl = document.getElementById("espServerUrl").value.trim();
+
+  if (!ssid) {
+    feedback.textContent = "Enter a Wi-Fi SSID first.";
+    feedback.className = "text-xs text-center font-medium text-amber-400";
+    return;
+  }
+
+  feedback.textContent = "Sending configuration to ESP32-CAM...";
+  feedback.className = "text-xs text-center font-medium text-sky-400";
+
+  try {
+    const res = await fetch("/api/esp32/wifi_config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ssid, password, server_url: serverUrl }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      feedback.textContent = data.message;
+      feedback.className = "text-xs text-center font-medium text-emerald-400";
+      setTimeout(() => {
+        closeWifiConfigModal();
+        loadDashboardData();
+      }, 1500);
+    } else {
+      feedback.textContent = data.message;
+      feedback.className = "text-xs text-center font-medium text-rose-400";
+    }
+  } catch (err) {
+    feedback.textContent = "Unable to send Wi-Fi settings.";
+    feedback.className = "text-xs text-center font-medium text-rose-400";
+  }
 }
 
 function getTodayDateString() {
@@ -142,10 +219,10 @@ function switchTab(tab) {
     const btn = document.getElementById(`tab-${t}`);
     if (t === tab) {
       btn.className =
-        "px-3.5 py-1.5 rounded-lg text-xs font-semibold transition bg-sky-500/15 text-sky-300 border border-sky-500/30";
+        "px-3 sm:px-3.5 py-1.5 rounded-lg text-xs font-semibold transition bg-sky-500/15 text-sky-300 border border-sky-500/30 whitespace-nowrap";
     } else {
       btn.className =
-        "px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent";
+        "px-3 sm:px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent whitespace-nowrap";
     }
   });
   loadDashboardData();
@@ -221,6 +298,7 @@ async function loadDashboardData() {
 
   cachedLogs = data.logs;
   cachedStudents = data.students;
+  cachedMobileUrl = data.mobile_url || "";
   cachedSchedules = [...data.schedules].sort((a, b) => {
     const dDiff =
       (DAY_ORDER[a.day_of_week] || 9) - (DAY_ORDER[b.day_of_week] || 9);
@@ -228,6 +306,11 @@ async function loadDashboardData() {
   });
 
   document.getElementById("activeClassBadge").textContent = data.active_subject;
+  const mobileHint = document.getElementById("mobileAccessHint");
+  if (mobileHint && cachedMobileUrl) {
+    mobileHint.textContent = `Phone Wi-Fi URL: ${cachedMobileUrl}`;
+  }
+
   const enrolledCountEl = document.getElementById("enrolledCountBadge");
   if (enrolledCountEl) {
     enrolledCountEl.textContent = `${cachedStudents.length} Student${cachedStudents.length === 1 ? "" : "s"}`;
@@ -237,15 +320,12 @@ async function loadDashboardData() {
     updateEsp32CameraStatus(data.esp32);
   }
 
-  const overrideSel = document.getElementById("overrideSubject");
   const filterSubSel = document.getElementById("filterSubject");
   const filterStuSel = document.getElementById("filterStudent");
 
-  const prevOverride = overrideSel.value;
   const prevFilterSub = filterSubSel.value;
   const prevFilterStu = filterStuSel.value;
 
-  overrideSel.innerHTML = `<option value="">Auto Schedule</option>`;
   filterSubSel.innerHTML = `<option value="">All Subjects</option>`;
   filterStuSel.innerHTML = `<option value="">All Students</option>`;
 
@@ -256,7 +336,6 @@ async function loadDashboardData() {
       const optLabel = s.subject_code
         ? `${s.subject_code} • ${s.subject}`
         : s.subject;
-      overrideSel.innerHTML += `<option value="${s.subject}">${optLabel}</option>`;
       filterSubSel.innerHTML += `<option value="${s.subject}">${optLabel}</option>`;
     }
   });
@@ -265,7 +344,6 @@ async function loadDashboardData() {
     filterStuSel.innerHTML += `<option value="${st.student_id}">${st.full_name}</option>`;
   });
 
-  overrideSel.value = prevOverride;
   filterSubSel.value = prevFilterSub;
   filterStuSel.value = prevFilterStu;
 
@@ -286,9 +364,24 @@ function renderStudentsTable() {
           ? "bg-sky-500/20 text-sky-300 ring-1 ring-sky-400/50"
           : "text-slate-400 hover:text-sky-300 hover:bg-slate-800";
 
+        const initials =
+          s.full_name
+            .split(" ")
+            .filter(Boolean)
+            .slice(0, 2)
+            .map((w) => w[0].toUpperCase())
+            .join("") || "?";
+
+        const avatarHtml = s.photo_url
+          ? `<button type="button" onclick="openImagePreviewUrl('${s.photo_url}?t=${Date.now()}', '${s.full_name.replace(/'/g, "\\'")}', '${s.student_id} • ${s.section}')" title="View Enrolled Portrait" class="w-10 h-10 rounded-full overflow-hidden border border-slate-700 hover:border-sky-400 transition block shrink-0">
+           <img src="${s.photo_url}?t=${Date.now()}" alt="${s.full_name}" class="w-full h-full object-cover" />
+         </button>`
+          : `<div class="w-10 h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0">${initials}</div>`;
+
         return `
       <tr class="${rowBg} transition">
-        <td class="py-3 px-4 font-mono text-xs text-sky-300 ${edgeAccent}">${s.student_id}</td>
+        <td class="py-3 px-4 ${edgeAccent}">${avatarHtml}</td>
+        <td class="py-3 px-4 font-mono text-xs text-sky-300">${s.student_id}</td>
         <td class="py-3 px-4 font-medium text-slate-100">${s.full_name}</td>
         <td class="py-3 px-4"><span class="px-2 py-0.5 rounded text-xs font-semibold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">${s.section}</span></td>
         <td class="py-3 px-4 text-xs text-slate-400">${s.created_at}</td>
@@ -309,7 +402,7 @@ function renderStudentsTable() {
     `;
       })
       .join("") ||
-    `<tr><td colspan="5" class="py-6 px-4 text-center text-xs text-slate-500">No enrolled students.</td></tr>`;
+    `<tr><td colspan="6" class="py-6 px-4 text-center text-xs text-slate-500">No enrolled students.</td></tr>`;
 }
 
 // --- DAY-GROUPED SCHEDULES ---
@@ -405,7 +498,7 @@ function renderDayGroupedSchedules() {
     .join("");
 }
 
-// --- ATTENDANCE LOGS (WITH SINGLE LOG DELETE & PROOF PREVIEW) ---
+// --- ATTENDANCE LOGS ---
 function onLogDateScopeChange() {
   const scope = document.getElementById("logDateScope").value;
   const dateInput = document.getElementById("filterDate");
@@ -770,12 +863,21 @@ function toggleEditStudent(studentId) {
 
   const card = document.getElementById("enrollFormCard");
   card.className =
-    "lg:col-span-4 bg-sky-950/15 border border-sky-500/50 ring-1 ring-sky-500/20 rounded-2xl p-6 transition-colors shadow-xl shadow-black/25";
+    "lg:col-span-4 bg-sky-950/15 border border-sky-500/50 ring-1 ring-sky-500/20 rounded-2xl p-5 sm:p-6 transition-colors shadow-xl shadow-black/25";
 
   document.getElementById("enrollFormTitle").textContent = "Edit Student";
   document.getElementById("enrollFormTitle").className =
     "text-base font-bold text-sky-300";
   document.getElementById("cancelEditStudentBtn").classList.remove("hidden");
+
+  const photoWrap = document.getElementById("editCurrentPhotoWrap");
+  if (student.photo_url) {
+    document.getElementById("editCurrentPhotoImg").src =
+      `${student.photo_url}?t=${Date.now()}`;
+    photoWrap.classList.remove("hidden");
+  } else {
+    photoWrap.classList.add("hidden");
+  }
 
   const submitBtn = document.getElementById("enrollSubmitBtn");
   submitBtn.textContent = "Save Changes";
@@ -799,12 +901,13 @@ function resetStudentForm() {
 
   const card = document.getElementById("enrollFormCard");
   card.className =
-    "lg:col-span-4 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-6 transition-colors shadow-xl shadow-black/25";
+    "lg:col-span-4 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-5 sm:p-6 transition-colors shadow-xl shadow-black/25";
 
   document.getElementById("enrollFormTitle").textContent = "Enroll Student";
   document.getElementById("enrollFormTitle").className =
     "text-base font-bold text-white";
   document.getElementById("cancelEditStudentBtn").classList.add("hidden");
+  document.getElementById("editCurrentPhotoWrap").classList.add("hidden");
 
   const submitBtn = document.getElementById("enrollSubmitBtn");
   submitBtn.textContent = "Capture & Save";
@@ -887,7 +990,7 @@ function toggleEditSchedule(schedId) {
 
   const card = document.getElementById("schedFormCard");
   card.className =
-    "lg:col-span-4 bg-sky-950/15 border border-sky-500/50 ring-1 ring-sky-500/20 rounded-2xl p-6 transition-colors shadow-xl shadow-black/25";
+    "lg:col-span-4 bg-sky-950/15 border border-sky-500/50 ring-1 ring-sky-500/20 rounded-2xl p-5 sm:p-6 transition-colors shadow-xl shadow-black/25";
 
   document.getElementById("schedFormTitle").textContent = "Edit Schedule";
   document.getElementById("schedFormTitle").className =
@@ -913,7 +1016,7 @@ function resetScheduleForm() {
 
   const card = document.getElementById("schedFormCard");
   card.className =
-    "lg:col-span-4 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-6 transition-colors shadow-xl shadow-black/25";
+    "lg:col-span-4 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-5 sm:p-6 transition-colors shadow-xl shadow-black/25";
 
   document.getElementById("schedFormTitle").textContent = "Add Schedule";
   document.getElementById("schedFormTitle").className =

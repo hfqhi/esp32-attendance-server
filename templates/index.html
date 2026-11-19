@@ -18,7 +18,7 @@
       class="sticky top-0 z-30 bg-[#0c1220]/95 backdrop-blur-md border-b border-slate-800/90"
     >
       <div
-        class="max-w-7xl mx-auto px-6 py-3.5 grid grid-cols-1 lg:grid-cols-12 items-center gap-3"
+        class="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 grid grid-cols-1 lg:grid-cols-12 items-center gap-3"
       >
         <!-- Brand Identity -->
         <div
@@ -53,39 +53,47 @@
                 >CPE-3B</span
               >
             </div>
+            <p
+              id="mobileAccessHint"
+              class="text-[11px] text-slate-400 font-mono truncate hidden sm:block"
+            >
+              Phone URL: loading...
+            </p>
           </div>
         </div>
 
         <!-- Centered Navigation Pill Bar -->
-        <nav class="lg:col-span-5 flex items-center justify-center">
+        <nav
+          class="lg:col-span-5 flex items-center justify-center overflow-x-auto"
+        >
           <div
             class="inline-flex items-center gap-1 p-1 rounded-xl bg-slate-900/90 border border-slate-800 shadow-inner"
           >
             <button
               onclick="switchTab('kiosk')"
               id="tab-kiosk"
-              class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition bg-sky-500/15 text-sky-300 border border-sky-500/30"
+              class="px-3 sm:px-3.5 py-1.5 rounded-lg text-xs font-semibold transition bg-sky-500/15 text-sky-300 border border-sky-500/30 whitespace-nowrap"
             >
               Live Scanner
             </button>
             <button
               onclick="switchTab('logs')"
               id="tab-logs"
-              class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent"
+              class="px-3 sm:px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent whitespace-nowrap"
             >
               Attendance Logs
             </button>
             <button
               onclick="switchTab('enroll')"
               id="tab-enroll"
-              class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent"
+              class="px-3 sm:px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent whitespace-nowrap"
             >
               Enrolled Faces
             </button>
             <button
               onclick="switchTab('schedules')"
               id="tab-schedules"
-              class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent"
+              class="px-3 sm:px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent whitespace-nowrap"
             >
               Schedules
             </button>
@@ -98,7 +106,7 @@
         >
           <span
             id="activeClassBadge"
-            class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 text-sky-300 border border-slate-800 truncate max-w-[180px]"
+            class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 text-sky-300 border border-slate-800 truncate max-w-[175px]"
           >
             Loading...
           </span>
@@ -110,24 +118,24 @@
       </div>
     </header>
 
-    <main class="max-w-7xl mx-auto px-6 py-7 space-y-6">
-      <!-- Insecure Host Warning -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-7 space-y-6">
+      <!-- Browser Webcam HTTPS Info (Only shown if Browser Webcam is picked on phone IP) -->
       <div
         id="insecureContextBanner"
-        class="hidden bg-rose-500/10 border border-rose-500/40 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs"
+        class="hidden bg-amber-500/10 border border-amber-500/40 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs"
       >
-        <span class="text-rose-300 font-medium">
-          Camera blocked on
-          <span id="currentOriginLabel" class="font-mono"></span>. Open via
-          <span class="font-mono text-white">localhost</span> or select
-          ESP32-CAM.
+        <span class="text-amber-200 font-medium">
+          Phone browser webcam requires HTTPS on
+          <span id="currentOriginLabel" class="font-mono"></span>. Switch camera
+          to <span class="font-mono text-white">ESP32-CAM</span> or upload a
+          photo.
         </span>
         <a
           id="switchLocalhostBtn"
           href="http://localhost:5000"
-          class="bg-rose-600 hover:bg-rose-500 text-white font-semibold px-3 py-1.5 rounded-lg transition"
+          class="hidden bg-slate-800 hover:bg-slate-700 text-white font-semibold px-3 py-1.5 rounded-lg transition"
         >
-          Open localhost:5000
+          Open localhost
         </a>
       </div>
 
@@ -136,7 +144,7 @@
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
           <!-- Camera Viewport (7 cols) -->
           <div
-            class="lg:col-span-7 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-6 shadow-xl shadow-black/25 flex flex-col justify-between"
+            class="lg:col-span-7 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-5 sm:p-6 shadow-xl shadow-black/25 flex flex-col justify-between"
           >
             <div>
               <div
@@ -158,14 +166,31 @@
                   <select
                     id="cameraDeviceSelect"
                     onchange="onCameraDeviceChange()"
-                    class="bg-slate-900 border border-slate-700/80 text-xs rounded-lg px-2.5 py-1.5 text-slate-200 max-w-[165px] truncate"
+                    class="bg-slate-900 border border-slate-700/80 text-xs rounded-lg px-2.5 py-1.5 text-slate-200 max-w-[180px] truncate"
                   ></select>
-                  <select
-                    id="overrideSubject"
-                    class="bg-slate-900 border border-slate-700/80 text-xs rounded-lg px-2.5 py-1.5 text-slate-200 max-w-[165px] truncate"
+
+                  <button
+                    type="button"
+                    onclick="openWifiConfigModal()"
+                    title="Configure ESP32-CAM Wi-Fi"
+                    class="inline-flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-xs font-medium px-2.5 py-1.5 rounded-lg text-slate-200 transition"
                   >
-                    <option value="">Auto Schedule</option>
-                  </select>
+                    <svg
+                      class="w-3.5 h-3.5 text-sky-400"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      stroke-width="2"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"
+                      />
+                    </svg>
+                    <span>Wi-Fi</span>
+                  </button>
+
                   <button
                     id="toggleScanBtn"
                     onclick="toggleScanner()"
@@ -243,7 +268,7 @@
 
           <!-- Right Column: Recent Scans (5 cols) -->
           <div
-            class="lg:col-span-5 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-6 shadow-xl shadow-black/25 flex flex-col"
+            class="lg:col-span-5 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-5 sm:p-6 shadow-xl shadow-black/25 flex flex-col"
           >
             <div class="flex items-center justify-between gap-2 mb-4">
               <div class="flex items-center gap-2.5">
@@ -333,7 +358,7 @@
         </div>
 
         <div
-          class="bg-[#0d1424] border border-slate-800/90 rounded-2xl p-6 space-y-5 shadow-xl shadow-black/25"
+          class="bg-[#0d1424] border border-slate-800/90 rounded-2xl p-5 sm:p-6 space-y-5 shadow-xl shadow-black/25"
         >
           <div
             class="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800"
@@ -502,7 +527,7 @@
       >
         <div
           id="enrollFormCard"
-          class="lg:col-span-4 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-6 transition-colors shadow-xl shadow-black/25"
+          class="lg:col-span-4 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-5 sm:p-6 transition-colors shadow-xl shadow-black/25"
         >
           <div class="flex items-center justify-between mb-4">
             <h2 id="enrollFormTitle" class="text-base font-bold text-white">
@@ -518,6 +543,27 @@
           </div>
 
           <div class="space-y-3 text-sm">
+            <!-- Current Enrolled Portrait Preview (Shown when Editing) -->
+            <div
+              id="editCurrentPhotoWrap"
+              class="hidden flex items-center gap-3 p-2.5 rounded-xl bg-slate-900/90 border border-slate-800"
+            >
+              <img
+                id="editCurrentPhotoImg"
+                src=""
+                alt="Enrolled Portrait"
+                class="w-12 h-12 rounded-full object-cover border border-sky-500/40 shrink-0"
+              />
+              <div class="min-w-0">
+                <p class="text-xs font-semibold text-slate-200 truncate">
+                  Current Enrolled Photo
+                </p>
+                <p class="text-[11px] text-slate-400">
+                  Capture or upload new photo to replace
+                </p>
+              </div>
+            </div>
+
             <input
               id="enrollId"
               type="text"
@@ -598,7 +644,7 @@
         </div>
 
         <div
-          class="lg:col-span-8 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-6 shadow-xl shadow-black/25"
+          class="lg:col-span-8 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-5 sm:p-6 shadow-xl shadow-black/25"
         >
           <div class="flex items-center justify-between mb-4">
             <h2 class="text-base font-bold text-white">Registered Students</h2>
@@ -614,6 +660,7 @@
                 <tr
                   class="border-b border-slate-800 text-slate-400 text-xs uppercase"
                 >
+                  <th class="py-3 px-4">Photo</th>
                   <th class="py-3 px-4">Student ID</th>
                   <th class="py-3 px-4">Name</th>
                   <th class="py-3 px-4">Section</th>
@@ -637,7 +684,7 @@
       >
         <div
           id="schedFormCard"
-          class="lg:col-span-4 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-6 transition-colors shadow-xl shadow-black/25"
+          class="lg:col-span-4 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-5 sm:p-6 transition-colors shadow-xl shadow-black/25"
         >
           <div class="flex items-center justify-between mb-4">
             <h2 id="schedFormTitle" class="text-base font-bold text-white">
@@ -737,7 +784,7 @@
       </section>
     </main>
 
-    <!-- PROOF SNAPSHOT MODAL -->
+    <!-- PROOF / STUDENT PORTRAIT MODAL -->
     <div
       id="proofModal"
       onclick="closeProofModal()"
@@ -752,7 +799,7 @@
             id="proofModalTitle"
             class="text-sm font-bold text-slate-100 truncate"
           >
-            Capture Proof
+            Photo Preview
           </h3>
           <button
             type="button"
@@ -768,7 +815,7 @@
           <img
             id="proofModalImg"
             src=""
-            alt="Attendance Capture Proof"
+            alt="Photo Preview"
             class="w-full h-auto object-contain"
           />
         </div>
@@ -776,6 +823,93 @@
           id="proofModalMeta"
           class="text-xs text-slate-400 font-mono text-center"
         ></p>
+      </div>
+    </div>
+
+    <!-- ESP32-CAM WI-FI CONFIGURATION MODAL -->
+    <div
+      id="wifiConfigModal"
+      onclick="closeWifiConfigModal()"
+      class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+    >
+      <div
+        onclick="event.stopPropagation()"
+        class="bg-[#0d1424] border border-slate-700 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <h3 class="text-base font-bold text-white">
+              ESP32-CAM Wi-Fi Settings
+            </h3>
+            <p id="wifiModalStatus" class="text-xs text-slate-400 mt-0.5">
+              Checking device status...
+            </p>
+          </div>
+          <button
+            type="button"
+            onclick="closeWifiConfigModal()"
+            class="text-xs text-slate-300 hover:text-white px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700"
+          >
+            Close
+          </button>
+        </div>
+
+        <div class="space-y-3 text-sm">
+          <div>
+            <label class="block text-xs text-slate-400 mb-1"
+              >Wi-Fi Network Name (SSID)</label
+            >
+            <input
+              id="espWifiSsid"
+              type="text"
+              placeholder="e.g., CPE3B_Hotspot"
+              class="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-2 text-slate-100"
+            />
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400 mb-1"
+              >Wi-Fi Password</label
+            >
+            <input
+              id="espWifiPass"
+              type="password"
+              placeholder="Enter Wi-Fi password"
+              class="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-2 text-slate-100"
+            />
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400 mb-1"
+              >Laptop Server URL</label
+            >
+            <input
+              id="espServerUrl"
+              type="text"
+              placeholder="http://192.168.1.100:5000"
+              class="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-2 font-mono text-xs text-slate-100"
+            />
+          </div>
+
+          <button
+            type="button"
+            onclick="saveEsp32WifiConfig()"
+            class="w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold py-2.5 rounded-lg transition"
+          >
+            Save & Reconnect ESP32-CAM
+          </button>
+          <p
+            id="wifiConfigFeedback"
+            class="text-xs text-center font-medium"
+          ></p>
+
+          <div
+            class="p-3 rounded-xl bg-slate-900/90 border border-slate-800 text-[11px] text-slate-400 leading-relaxed"
+          >
+            First-time setup: If ESP32-CAM is offline, connect your phone or
+            laptop to Wi-Fi
+            <span class="font-mono text-sky-300">ES-SEE-CAM-Setup</span> and
+            open <span class="font-mono text-sky-300">http://192.168.4.1</span>.
+          </div>
+        </div>
       </div>
     </div>
 
