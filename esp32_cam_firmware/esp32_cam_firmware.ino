@@ -47,66 +47,75 @@ WiFiClient streamClient;
 bool sdAvailable = false;
 unsigned long lastCaptureMs = 0;
 unsigned long lastHeartbeatMs = 0;
-const unsigned long CAPTURE_INTERVAL_MS = 1100;
+const unsigned long CAPTURE_INTERVAL_MS = 1000;
 const unsigned long HEARTBEAT_INTERVAL_MS = 8000;
 
 // Motion/Presence detection buffer
 uint8_t prevSample[64] = {0};
 size_t prevFrameLen = 0;
-RTC_DATA_ATTR uint32_t offlineCounter = 1;
+RTC_DATA_ATTR uint32_t bufferCounter = 1;
 
 // ==========================================
-// 2. TIMESTAMP HELPERS
+// 2. TIMESTAMP & PATH HELPERS
 // ==========================================
 struct TimeStamps {
-  String dateFile;   // 11-19-2026
+  String dayName;    // Thursday
   String dateIso;    // 2026-11-19
-  String timeFile;   // 06-15-30PM
-  String timeHuman;  // 06:15:30 PM
+  String timeFile;   // 09-15-30PM
+  String timeHuman;  // 09:15:30 PM
+  bool validNtp;
 };
 
 TimeStamps getCurrentTimestamps() {
   TimeStamps ts;
   struct tm timeinfo;
   if (getLocalTime(&timeinfo, 50)) {
-    char dFile[16], dIso[16], tFile[16], tHuman[16];
-    strftime(dFile, sizeof(dFile), "%m-%d-%Y", &timeinfo);
+    char dDay[16], dIso[16], tFile[16], tHuman[16];
+    strftime(dDay, sizeof(dDay), "%A", &timeinfo);
     strftime(dIso, sizeof(dIso), "%Y-%m-%d", &timeinfo);
     strftime(tFile, sizeof(tFile), "%I-%M-%S%p", &timeinfo);
     strftime(tHuman, sizeof(tHuman), "%I:%M:%S %p", &timeinfo);
-    ts.dateFile = String(dFile);
+    ts.dayName = String(dDay);
     ts.dateIso = String(dIso);
     ts.timeFile = String(tFile);
     ts.timeHuman = String(tHuman);
+    ts.validNtp = true;
   } else {
     char idxBuf[16];
-    snprintf(idxBuf, sizeof(idxBuf), "SEQ-%04lu", (unsigned long)offlineCounter++);
-    ts.dateFile = "Offline_Unsynced";
-    ts.dateIso = "";
+    snprintf(idxBuf, sizeof(idxBuf), "SEQ-%04lu", (unsigned long)bufferCounter++);
+    ts.dayName = "Unsynced";
+    ts.dateIso = "0000-00-00";
     ts.timeFile = String(idxBuf);
     ts.timeHuman = String(idxBuf);
+    ts.validNtp = false;
   }
   return ts;
 }
 
-String sanitizeName(const String& raw) {
+String sanitizeSlug(const String& raw, const String& fallback) {
   String clean = "";
   for (size_t i = 0; i < raw.length(); i++) {
     char c = raw[i];
     if (isalnum(c) || c == '-' || c == '_') clean += c;
     else if (c == ' ') clean += '_';
   }
-  return clean.length() > 0 ? clean : "Student";
+  return clean.length() > 0 ? clean : fallback;
+}
+
+void ensureDir(const String& path) {
+  if (!SD_MMC.exists(path)) {
+    SD_MMC.mkdir(path);
+  }
 }
 
 // ==========================================
-// 3. PRESENCE / MOTION GATE
+// 3. PRESENCE / MOTION GATE (PREVENTS RANDOM SHOTS)
 // ==========================================
-bool hasSceneChanged(camera_fb_t* fb) {
+bool hasSignificantMotion(camera_fb_t* fb) {
   if (!fb || fb->len < 512) return false;
 
   long lenDiff = abs((long)fb->len - (long)prevFrameLen);
-  bool sizeChanged = (prevFrameLen == 0) || (lenDiff > (long)(prevFrameLen * 0.06));
+  bool sizeChanged = (prevFrameLen == 0) || (lenDiff > (long)(prevFrameLen * 0.12));
 
   uint8_t currSample[64];
   size_t usable = fb->len > 512 ? fb->len - 512 : fb->len;
@@ -118,18 +127,18 @@ bool hasSceneChanged(camera_fb_t* fb) {
     size_t idx = 256 + i * step;
     if (idx >= fb->len) idx = fb->len - 1;
     currSample[i] = fb->buf[idx];
-    if (abs((int)currSample[i] - (int)prevSample[i]) > 18) {
+    if (abs((int)currSample[i] - (int)prevSample[i]) > 24) {
       diffCount++;
     }
     prevSample[i] = currSample[i];
   }
   prevFrameLen = fb->len;
 
-  return sizeChanged || (diffCount >= 16);
+  return sizeChanged || (diffCount >= 24);
 }
 
 // ==========================================
-// 4. CAMERA (QVGA REAL-TIME + INDOOR TUNED) & MICROSD SETUP
+// 4. CAMERA & STRUCTURED MICROSD STORAGE
 // ==========================================
 bool initCamera() {
   camera_config_t config;
@@ -152,11 +161,8 @@ bool initCamera() {
   config.pin_pwdn     = PWDN_GPIO_NUM;
   config.pin_reset    = RESET_GPIO_NUM;
 
-  // 10 MHz XCLK doubles max exposure time for bright indoor lighting without a flashlight
   config.xclk_freq_hz = 10000000;
   config.pixel_format = PIXFORMAT_JPEG;
-
-  // QVGA (320x240) reduces frame size by ~70% for smooth real-time streaming & YuNet alignment
   config.frame_size   = FRAMESIZE_QVGA;
   config.jpeg_quality = 12;
   config.fb_count     = psramFound() ? 2 : 1;
@@ -166,32 +172,29 @@ bool initCamera() {
     return false;
   }
 
-  // Register-level OV2640 indoor low-light & facial clarity calibration
   sensor_t* s = esp_camera_sensor_get();
   if (s != nullptr) {
-    s->set_brightness(s, 2);                  // Max indoor brightness boost (-2 to 2)
-    s->set_contrast(s, 1);                    // Crisp facial edge contrast (-2 to 2)
-    s->set_saturation(s, 0);                  // Natural skin tones
-    s->set_sharpness(s, 2);                   // Sharpen facial landmarks (-2 to 2)
-    s->set_whitebal(s, 1);                    // Enable Auto White Balance
-    s->set_awb_gain(s, 1);                    // Enable AWB Gain
-    s->set_wb_mode(s, 0);                     // Auto WB mode
-    s->set_exposure_ctrl(s, 1);               // Enable Auto Exposure Control
-    s->set_aec2(s, 1);                        // Enable DSP Night/Indoor Auto Exposure
-    s->set_ae_level(s, 2);                    // Higher auto-exposure target (+2)
-    s->set_gain_ctrl(s, 1);                   // Enable Auto Gain Control
-    s->set_gainceiling(s, (gainceiling_t)5);  // GAINCEILING_32X for normal room lighting
-    s->set_bpc(s, 1);                         // Black pixel correction
-    s->set_wpc(s, 1);                         // White pixel correction
-    s->set_raw_gma(s, 1);                     // Gamma curve correction
-    s->set_lenc(s, 1);                        // Lens shading correction
-    s->set_dcw(s, 1);                         // Downsize EN
-
-    s->set_reg(s, 0x11, 0xff, 0x01);          // CLKRC: internal clock prescaler for steady indoor exposure
-    s->set_reg(s, 0x0f, 0xff, 0x4b);          // COM6: enable indoor anti-banding timing
+    s->set_brightness(s, 2);
+    s->set_contrast(s, 1);
+    s->set_saturation(s, 0);
+    s->set_sharpness(s, 2);
+    s->set_whitebal(s, 1);
+    s->set_awb_gain(s, 1);
+    s->set_wb_mode(s, 0);
+    s->set_exposure_ctrl(s, 1);
+    s->set_aec2(s, 1);
+    s->set_ae_level(s, 2);
+    s->set_gain_ctrl(s, 1);
+    s->set_gainceiling(s, (gainceiling_t)5);
+    s->set_bpc(s, 1);
+    s->set_wpc(s, 1);
+    s->set_raw_gma(s, 1);
+    s->set_lenc(s, 1);
+    s->set_dcw(s, 1);
+    s->set_reg(s, 0x11, 0xff, 0x01);
+    s->set_reg(s, 0x0f, 0xff, 0x4b);
   }
 
-  // Warm up AEC/AGC registers across 8 frames so indoor exposure settles completely
   for (int i = 0; i < 8; i++) {
     camera_fb_t* warmup = esp_camera_fb_get();
     if (warmup) esp_camera_fb_return(warmup);
@@ -208,63 +211,89 @@ bool initMicroSD() {
   }
   if (SD_MMC.cardType() == CARD_NONE) return false;
 
-  const char* dirs[] = {"/enrolled_faces", "/captured_faces", "/offline_queue", "/logs"};
-  for (const char* d : dirs) {
-    if (!SD_MMC.exists(d)) SD_MMC.mkdir(d);
-  }
-  Serial.println("[SD] Systematic folders ready (/enrolled_faces, /captured_faces, /offline_queue, /logs).");
+  ensureDir("/enrolled_faces");
+  ensureDir("/attendance_captures");
+  ensureDir("/logs");
+  ensureDir("/offline_buffer");
+  Serial.println("[SD] Structured hierarchy ready (/enrolled_faces, /attendance_captures, /logs, /offline_buffer).");
   return true;
 }
 
-void logAttendanceToSd(const String& studentName, const String& subjectCode, const String& status, const TimeStamps& ts) {
+void logStructuredAttendanceToSd(const String& studentName, const String& subjectCode, const String& status, const TimeStamps& ts) {
   if (!sdAvailable) return;
-  String csvPath = "/logs/attendance_" + ts.dateFile + ".csv";
+
+  String daySlug = sanitizeSlug(ts.dayName, "Day");
+  String dateSlug = sanitizeSlug(ts.dateIso, "Date");
+  String subjSlug = sanitizeSlug(subjectCode, "General");
+
+  String dayDir = "/logs/" + daySlug;
+  String dateDir = dayDir + "/" + dateSlug;
+  ensureDir(dayDir);
+  ensureDir(dateDir);
+
+  String csvPath = dateDir + "/" + subjSlug + "_attendance.csv";
   bool isNew = !SD_MMC.exists(csvPath);
 
   File f = SD_MMC.open(csvPath, isNew ? FILE_WRITE : FILE_APPEND);
   if (f) {
     if (isNew) {
-      f.println("Student Name,Subject,Status,Date,Time");
+      f.println("Student Name,Subject Code,Status,Day,Date,Time");
     }
-    f.printf("\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"\n",
-             studentName.c_str(), subjectCode.c_str(), status.c_str(),
-             ts.dateFile.c_str(), ts.timeHuman.c_str());
+    f.printf("\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"\n",
+             studentName.c_str(), subjSlug.c_str(), status.c_str(),
+             ts.dayName.c_str(), ts.dateIso.c_str(), ts.timeHuman.c_str());
     f.close();
   }
 }
 
-void saveVerifiedCapture(camera_fb_t* fb, const String& studentName, const TimeStamps& ts) {
+void saveStructuredAttendanceCapture(camera_fb_t* fb, const String& studentName, const String& subjectCode, const TimeStamps& ts) {
   if (!sdAvailable || !fb) return;
-  String dateDir = "/captured_faces/" + ts.dateFile;
-  if (!SD_MMC.exists(dateDir)) SD_MMC.mkdir(dateDir);
 
-  String fileName = sanitizeName(studentName) + "_" + ts.dateFile + "_" + ts.timeFile + ".jpg";
-  String fullPath = dateDir + "/" + fileName;
+  String daySlug = sanitizeSlug(ts.dayName, "Day");
+  String dateSlug = sanitizeSlug(ts.dateIso, "Date");
+  String subjSlug = sanitizeSlug(subjectCode, "General");
+  String stuSlug = sanitizeSlug(studentName, "Student");
+
+  String dayDir = "/attendance_captures/" + daySlug;
+  String dateDir = dayDir + "/" + dateSlug;
+  String subjDir = dateDir + "/" + subjSlug;
+  ensureDir(dayDir);
+  ensureDir(dateDir);
+  ensureDir(subjDir);
+
+  String fileName = stuSlug + "_" + subjSlug + "_" + dateSlug + "_" + ts.timeFile + ".jpg";
+  String fullPath = subjDir + "/" + fileName;
 
   File img = SD_MMC.open(fullPath, FILE_WRITE);
   if (img) {
     img.write(fb->buf, fb->len);
     img.close();
-    Serial.printf("[SD] Saved verified capture: %s\n", fullPath.c_str());
+    Serial.printf("[SD] Saved proof: %s\n", fullPath.c_str());
   }
 }
 
-void saveOfflineQueueCapture(camera_fb_t* fb, const TimeStamps& ts) {
+void bufferFrameSilentlyWhenOffline(camera_fb_t* fb, const TimeStamps& ts) {
   if (!sdAvailable || !fb) return;
-  String fileName = "Offline_" + ts.dateFile + "_" + ts.timeFile + ".jpg";
-  String fullPath = "/offline_queue/" + fileName;
+  // Cap offline buffer to 50 frames so SD card never fills with random shots
+  File root = SD_MMC.open("/offline_buffer");
+  int count = 0;
+  if (root && root.isDirectory()) {
+    File f = root.openNextFile();
+    while (f) { count++; f.close(); f = root.openNextFile(); }
+    root.close();
+  }
+  if (count >= 50) return;
 
+  String fullPath = "/offline_buffer/BUF_" + ts.dateIso + "_" + ts.timeFile + ".jpg";
   File img = SD_MMC.open(fullPath, FILE_WRITE);
   if (img) {
     img.write(fb->buf, fb->len);
     img.close();
-    Serial.printf("[SD-OFFLINE] Queued face capture: %s\n", fullPath.c_str());
-    logAttendanceToSd("Offline_Queued", "OFFLINE", "PENDING_SYNC", ts);
   }
 }
 
 // ==========================================
-// 5. SERVER SYNC: REGISTER IP, ENROLLED PORTRAITS & OFFLINE QUEUE
+// 5. SERVER SYNC: REGISTER IP, PORTRAITS & OFFLINE BUFFER
 // ==========================================
 void sendHeartbeatToServer() {
   if (WiFi.status() != WL_CONNECTED) return;
@@ -299,7 +328,6 @@ void syncEnrolledPortraitsFromServer() {
             if (out) {
               dl.writeToStream(&out);
               out.close();
-              Serial.printf("[SD] Synced enrolled portrait: %s\n", sdPath.c_str());
             }
           }
           dl.end();
@@ -310,9 +338,9 @@ void syncEnrolledPortraitsFromServer() {
   http.end();
 }
 
-void syncOfflineQueueToServer() {
+void syncOfflineBufferToServer() {
   if (!sdAvailable || WiFi.status() != WL_CONNECTED) return;
-  File root = SD_MMC.open("/offline_queue");
+  File root = SD_MMC.open("/offline_buffer");
   if (!root || !root.isDirectory()) return;
 
   File entry = root.openNextFile();
@@ -331,28 +359,24 @@ void syncOfflineQueueToServer() {
         http.begin(String(SERVER_BASE) + "/api/esp32/sync_offline");
         http.addHeader("Content-Type", "image/jpeg");
         http.addHeader("X-Camera-Source", "esp32");
-        http.setTimeout(4000);
+        http.setTimeout(3500);
 
         int code = http.POST(buf, fsize);
         if (code == 200) {
           JsonDocument doc;
           if (!deserializeJson(doc, http.getString())) {
             const char* status = doc["status"] | "UNKNOWN";
-            const char* stuName = doc["student_name"] | "Unknown";
-            const char* subjCode = doc["subject_code"] | "SYNC";
+            const char* stuName = doc["student_name"] | "";
+            const char* subjCode = doc["subject_code"] | "General";
+            const char* attStat = doc["attendance_status"] | "PRESENT";
             TimeStamps ts = getCurrentTimestamps();
 
-            if (strcmp(status, "LOGGED") == 0) {
-              String destDir = "/captured_faces/" + ts.dateFile;
-              if (!SD_MMC.exists(destDir)) SD_MMC.mkdir(destDir);
-              String destPath = destDir + "/" + sanitizeName(stuName) + "_" + ts.dateFile + "_" + ts.timeFile + ".jpg";
-              File dest = SD_MMC.open(destPath, FILE_WRITE);
-              if (dest) {
-                dest.write(buf, fsize);
-                dest.close();
-              }
-              logAttendanceToSd(stuName, subjCode, "PRESENT", ts);
-              Serial.printf("[SYNC] Logged offline capture for %s\n", stuName);
+            if (strcmp(status, "LOGGED") == 0 && strlen(stuName) > 0) {
+              camera_fb_t fakeFb;
+              fakeFb.buf = buf;
+              fakeFb.len = fsize;
+              saveStructuredAttendanceCapture(&fakeFb, stuName, subjCode, ts);
+              logStructuredAttendanceToSd(stuName, subjCode, attStat, ts);
             }
             SD_MMC.remove(entryPath);
           }
@@ -414,7 +438,7 @@ void serviceMjpegStream() {
 void setup() {
   Serial.begin(115200);
   delay(300);
-  Serial.println("\n=== CPE-3B Smart ESP32-CAM Node (QVGA Real-Time) ===");
+  Serial.println("\n=== CPE-3B Smart ESP32-CAM Node ===");
 
   pinMode(ONBOARD_LED_PIN, OUTPUT);
   digitalWrite(ONBOARD_LED_PIN, HIGH);
@@ -427,7 +451,7 @@ void setup() {
   sdAvailable = initMicroSD();
 
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false); // Disable Wi-Fi modem sleep for low-latency MJPEG streaming
+  WiFi.setSleep(false);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.printf("[WIFI] Connecting to %s", WIFI_SSID);
 
@@ -448,9 +472,9 @@ void setup() {
 
     sendHeartbeatToServer();
     syncEnrolledPortraitsFromServer();
-    syncOfflineQueueToServer();
+    syncOfflineBufferToServer();
   } else {
-    Serial.println("\n[WIFI] Offline mode — capturing motion faces to /offline_queue/");
+    Serial.println("\n[WIFI] Offline — silently buffering frames until reconnect");
   }
 }
 
@@ -471,7 +495,7 @@ void loop() {
   camera_fb_t* fb = esp_camera_fb_get();
   if (!fb) return;
 
-  if (!hasSceneChanged(fb)) {
+  if (!hasSignificantMotion(fb)) {
     esp_camera_fb_return(fb);
     return;
   }
@@ -479,7 +503,7 @@ void loop() {
   TimeStamps ts = getCurrentTimestamps();
 
   if (WiFi.status() != WL_CONNECTED) {
-    saveOfflineQueueCapture(fb, ts);
+    bufferFrameSilentlyWhenOffline(fb, ts);
     esp_camera_fb_return(fb);
     return;
   }
@@ -496,15 +520,16 @@ void loop() {
     if (!deserializeJson(doc, http.getString())) {
       const char* status   = doc["status"]  | "UNKNOWN";
       const char* message  = doc["message"] | "";
-      const char* stuName  = doc["student_name"] | "Student";
-      const char* subjCode = doc["subject_code"] | "";
+      const char* stuName  = doc["student_name"] | "";
+      const char* subjCode = doc["subject_code"] | "General";
       const char* attStat  = doc["attendance_status"] | "PRESENT";
 
       Serial.printf("[%s] %s\n", status, message);
 
-      if (strcmp(status, "LOGGED") == 0) {
-        saveVerifiedCapture(fb, stuName, ts);
-        logAttendanceToSd(stuName, subjCode, attStat, ts);
+      // Only save SD proof and CSV entry when a real student is verified and logged
+      if (strcmp(status, "LOGGED") == 0 && strlen(stuName) > 0) {
+        saveStructuredAttendanceCapture(fb, stuName, subjCode, ts);
+        logStructuredAttendanceToSd(stuName, subjCode, attStat, ts);
 
         for (int i = 0; i < 2; i++) {
           digitalWrite(ONBOARD_LED_PIN, LOW);
@@ -512,11 +537,11 @@ void loop() {
           digitalWrite(ONBOARD_LED_PIN, HIGH);
           delay(120);
         }
-        delay(2000);
+        delay(1800);
       }
     }
   } else {
-    saveOfflineQueueCapture(fb, ts);
+    bufferFrameSilentlyWhenOffline(fb, ts);
   }
 
   http.end();
