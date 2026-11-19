@@ -58,10 +58,10 @@ RTC_DATA_ATTR uint32_t bufferCounter = 1;
 // 2. TIMESTAMP & PATH HELPERS
 // ==========================================
 struct TimeStamps {
-  String dayName;    // Thursday
-  String dateIso;    // 2026-11-19
-  String timeFile;   // 10-35-00PM
-  String timeHuman;  // 10:35:00 PM
+  String dayName;    // Friday
+  String dateIso;    // 2026-11-20
+  String timeFile;   // 03-14-00AM
+  String timeHuman;  // 03:14:00 AM
   bool validNtp;
 };
 
@@ -137,7 +137,7 @@ bool hasSignificantMotion(camera_fb_t* fb) {
 }
 
 // ==========================================
-// 4. CAMERA (PIXEL-BINNED HIGH-FPS + BRIGHT INDOOR LIGHTING) & SD DATABASE
+// 4. EXACT ARDUINO CAMERAWEBSERVER OV2640 INITIALIZATION
 // ==========================================
 bool initCamera() {
   camera_config_t config;
@@ -160,47 +160,42 @@ bool initCamera() {
   config.pin_pwdn     = PWDN_GPIO_NUM;
   config.pin_reset    = RESET_GPIO_NUM;
 
-  // 20 MHz XCLK + CIF (400x296) enables OV2640 pixel binning for bright indoor light & 25-30 FPS
+  // Exact CameraWebServer configuration: 20 MHz XCLK + UXGA init -> VGA drop-down
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size   = FRAMESIZE_CIF;
+  config.frame_size   = FRAMESIZE_UXGA;
   config.jpeg_quality = 10;
+  config.fb_location  = CAMERA_FB_IN_PSRAM;
+  config.grab_mode    = CAMERA_GRAB_LATEST;
 
   if (psramFound()) {
-    config.fb_count  = 2;
-    config.grab_mode = CAMERA_GRAB_LATEST;
+    config.jpeg_quality = 10;
+    config.fb_count     = 2;
+    config.grab_mode    = CAMERA_GRAB_LATEST;
   } else {
-    config.fb_count  = 1;
-    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+    config.frame_size   = FRAMESIZE_SVGA;
+    config.fb_location  = CAMERA_FB_IN_DRAM;
+    config.fb_count     = 1;
   }
 
   if (esp_camera_init(&config) != ESP_OK) {
     return false;
   }
 
-  // Match CameraWebServer bright indoor exposure & natural white balance
+  // Exact CameraWebServer OV2640 register profile (crisp contrast, natural light, hmirror)
   sensor_t* s = esp_camera_sensor_get();
   if (s != nullptr) {
-    s->set_brightness(s, 1);
-    s->set_contrast(s, 0);
-    s->set_saturation(s, 0);
-    s->set_sharpness(s, 0);
-    s->set_whitebal(s, 1);
-    s->set_awb_gain(s, 1);
-    s->set_wb_mode(s, 0);
-    s->set_exposure_ctrl(s, 1);
-    s->set_aec2(s, 0);
-    s->set_ae_level(s, 2);
-    s->set_gain_ctrl(s, 1);
-    s->set_gainceiling(s, GAINCEILING_64X);
-    s->set_bpc(s, 0);
-    s->set_wpc(s, 1);
-    s->set_raw_gma(s, 1);
-    s->set_lenc(s, 1);
-    s->set_dcw(s, 1);
+    if (s->id.PID == OV3660_PID) {
+      s->set_vflip(s, 1);
+      s->set_brightness(s, 1);
+      s->set_saturation(s, -2);
+    }
+    // Drop down frame size from UXGA to VGA (640x480) for higher frame rate with full FOV
+    s->set_framesize(s, FRAMESIZE_VGA);
+    s->set_hmirror(s, 1);
   }
 
-  // Let AWB & AEC settle cleanly across 6 frames
+  // Warm up AWB/AEC across initial frames
   for (int i = 0; i < 6; i++) {
     camera_fb_t* warmup = esp_camera_fb_get();
     if (warmup) esp_camera_fb_return(warmup);
@@ -403,7 +398,7 @@ void syncOfflineBufferToServer() {
 }
 
 // ==========================================
-// 6. WEB DASHBOARD HIGH-FPS CAMERA STREAMING ENDPOINTS
+// 6. WEB DASHBOARD CAMERA STREAMING ENDPOINTS
 // ==========================================
 void handleSingleCapture() {
   camera_fb_t* fb = esp_camera_fb_get();
@@ -446,7 +441,7 @@ void serviceMjpegStream() {
 void setup() {
   Serial.begin(115200);
   delay(250);
-  Serial.println("\n=== CPE-3B ESP32-CAM High-FPS Node ===");
+  Serial.println("\n=== CPE-3B ESP32-CAM CameraWebServer-Profile Node ===");
 
   pinMode(ONBOARD_LED_PIN, OUTPUT);
   digitalWrite(ONBOARD_LED_PIN, HIGH);
