@@ -19,14 +19,14 @@ from database import (
 from face_engine import (
     extract_face_feature,
     identify_offline_face,
+    save_proof_snapshot,
     save_reference_portrait,
-    verify_and_check_liveness,
+    verify_instant_presence,
 )
 
 app = Flask(__name__)
 init_db()
 
-# Tracks live ESP32-CAM connection state
 esp32_node = {
     "ip": None,
     "last_seen": 0.0,
@@ -48,6 +48,11 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/proofs/<path:filename>", methods=["GET"])
+def serve_proof_image(filename):
+    return send_from_directory("captured_proofs", filename)
+
+
 # --- ESP32-CAM DEVICE ENDPOINTS ---
 @app.route("/api/esp32/register", methods=["POST"])
 def register_esp32():
@@ -60,7 +65,6 @@ def register_esp32():
 
 @app.route("/api/esp32/proxy_capture", methods=["GET"])
 def proxy_esp32_capture():
-    """Fetches a single JPEG from the ESP32-CAM to avoid browser canvas CORS blocks."""
     status = get_esp32_status()
     if not status["online"]:
         return jsonify({"success": False, "message": "ESP32-CAM is offline."}), 503
@@ -74,7 +78,6 @@ def proxy_esp32_capture():
 
 @app.route("/api/esp32/enrolled_portraits", methods=["GET"])
 def list_enrolled_portraits():
-    """Lists stored reference JPEG portraits so ESP32-CAM can mirror them onto its SD card."""
     files = [
         f for f in os.listdir("enrolled_faces")
         if f.lower().endswith(".jpg")
@@ -89,15 +92,12 @@ def download_portrait(filename):
 
 @app.route("/api/esp32/sync_offline", methods=["POST"])
 def sync_offline_capture():
-    """Processes an offline-queued JPEG from the ESP32-CAM SD card."""
     esp32_node["last_seen"] = time.time()
     raw_bytes = request.data
-    orig_date = request.headers.get("X-Capture-Date", "").strip()
-    orig_time = request.headers.get("X-Capture-Time", "").strip()
 
-    student = identify_offline_face(raw_bytes)
+    student, raw_frame = identify_offline_face(raw_bytes)
     if not student:
-        return jsonify({"status": "UNKNOWN", "student_name": "Unrecognized", "message": "No enrolled face matched"})
+        return jsonify({"status": "UNKNOWN", "student_name": "", "message": "No enrolled face matched"})
 
     subject_code, subject, att_status = get_active_schedule()
     if not subject:
@@ -106,15 +106,16 @@ def sync_offline_capture():
         att_status = "PRESENT"
 
     now_dt = datetime.now()
-    date_str = orig_date if len(orig_date) == 10 else now_dt.strftime("%Y-%m-%d")
-    time_str = orig_time if orig_time else now_dt.strftime("%I:%M:%S %p")
+    date_str = now_dt.strftime("%Y-%m-%d")
+    time_str = now_dt.strftime("%I:%M:%S %p")
+    proof_rel = save_proof_snapshot(raw_frame, student["full_name"], subject_code, is_spoof=False)
 
     conn = get_db()
     try:
         conn.execute("""
-            INSERT INTO attendance_logs (student_id, full_name, subject_code, subject, status, date_str, time_str)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (student["student_id"], student["full_name"], subject_code or "", subject, att_status, date_str, time_str))
+            INSERT INTO attendance_logs (student_id, full_name, subject_code, subject, status, date_str, time_str, proof_image)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (student["student_id"], student["full_name"], subject_code or "", subject, att_status, date_str, time_str, proof_rel))
         conn.commit()
     except sqlite3.IntegrityError:
         pass
@@ -150,6 +151,7 @@ def dashboard_data():
         END, start_time ASC
     """).fetchall()]
     logs = [dict(r) for r in conn.execute("SELECT * FROM attendance_logs ORDER BY date_str DESC, id DESC").fetchall()]
+    spoofs = [dict(r) for r in conn.execute("SELECT * FROM spoof_attempts ORDER BY id DESC LIMIT 12").fetchall()]
     conn.close()
 
     active_code, active_subject, _ = get_active_schedule()
@@ -160,6 +162,7 @@ def dashboard_data():
         "students": students,
         "schedules": schedules,
         "logs": logs,
+        "spoofs": spoofs,
         "active_subject": active_label,
         "pending_absences": get_ended_classes_with_missing_students(),
         "esp32": get_esp32_status(),
@@ -365,8 +368,26 @@ def verify_frame():
         camera_source = request.headers.get("X-Camera-Source", "esp32")
         esp32_node["last_seen"] = time.time()
 
-    pending_response, verified_student = verify_and_check_liveness(raw_image, source=camera_source)
+    pending_response, verified_student, raw_frame = verify_instant_presence(raw_image, source=camera_source)
     if pending_response:
+        if pending_response.get("status") == "SPOOF" and raw_frame is not None:
+            now_dt = datetime.now()
+            spoof_rel = save_proof_snapshot(raw_frame, pending_response.get("student_name", "Unknown"), "SPOOF", is_spoof=True)
+            conn = get_db()
+            conn.execute("""
+                INSERT INTO spoof_attempts (suspected_name, source, texture_score, proof_image, date_str, time_str)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                pending_response.get("student_name", "Unknown"),
+                camera_source.upper(),
+                pending_response.get("texture_score", 0.0),
+                spoof_rel,
+                now_dt.strftime("%Y-%m-%d"),
+                now_dt.strftime("%I:%M:%S %p"),
+            ))
+            conn.commit()
+            conn.close()
+
         status_code = 400 if pending_response.get("status") == "ERROR" else 200
         return jsonify(pending_response), status_code
 
@@ -385,27 +406,37 @@ def verify_frame():
     display_subj = subject_code or subject
 
     conn = get_db()
-    try:
-        conn.execute("""
-            INSERT INTO attendance_logs (student_id, full_name, subject_code, subject, status, date_str, time_str)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (verified_student["student_id"], verified_student["full_name"], subject_code or "", subject, att_status, date_str, time_str))
-        conn.commit()
-        msg = f"{verified_student['full_name']} • {att_status} ({display_subj})"
-        log_state = "LOGGED"
-    except sqlite3.IntegrityError:
-        msg = f"{verified_student['full_name']} • Already Logged ({display_subj})"
-        log_state = "ALREADY_LOGGED"
-    finally:
+    existing = conn.execute(
+        "SELECT id FROM attendance_logs WHERE student_id = ? AND subject = ? AND date_str = ?",
+        (verified_student["student_id"], subject, date_str),
+    ).fetchone()
+
+    if existing:
         conn.close()
+        return jsonify({
+            "status": "ALREADY_LOGGED",
+            "student_name": verified_student["full_name"],
+            "subject_code": subject_code,
+            "subject": subject,
+            "attendance_status": att_status,
+            "message": f"{verified_student['full_name']} • Already Logged ({display_subj})"
+        })
+
+    proof_rel = save_proof_snapshot(raw_frame, verified_student["full_name"], subject_code, is_spoof=False)
+    conn.execute("""
+        INSERT INTO attendance_logs (student_id, full_name, subject_code, subject, status, date_str, time_str, proof_image)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (verified_student["student_id"], verified_student["full_name"], subject_code or "", subject, att_status, date_str, time_str, proof_rel))
+    conn.commit()
+    conn.close()
 
     return jsonify({
-        "status": log_state,
+        "status": "LOGGED",
         "student_name": verified_student["full_name"],
         "subject_code": subject_code,
         "subject": subject,
         "attendance_status": att_status,
-        "message": msg
+        "message": f"{verified_student['full_name']} • {att_status} ({display_subj})"
     })
 
 
@@ -428,8 +459,8 @@ def mark_absences():
     for s in students:
         try:
             conn.execute("""
-                INSERT INTO attendance_logs (student_id, full_name, subject_code, subject, status, date_str, time_str)
-                VALUES (?, ?, ?, ?, 'ABSENT', ?, ?)
+                INSERT INTO attendance_logs (student_id, full_name, subject_code, subject, status, date_str, time_str, proof_image)
+                VALUES (?, ?, ?, ?, 'ABSENT', ?, ?, '')
             """, (s["student_id"], s["full_name"], subject_code, subject, date_str, time_str))
             added += 1
         except sqlite3.IntegrityError:
@@ -439,6 +470,21 @@ def mark_absences():
     return jsonify({"success": True, "message": f"Marked {added} student(s) ABSENT for {subject}."})
 
 
+@app.route("/api/logs/<int:log_id>", methods=["DELETE"])
+def delete_single_log(log_id):
+    """Deletes a single attendance log record and its associated proof image."""
+    conn = get_db()
+    row = conn.execute("SELECT proof_image FROM attendance_logs WHERE id = ?", (log_id,)).fetchone()
+    if row and row["proof_image"]:
+        proof_path = os.path.join("captured_proofs", row["proof_image"])
+        if os.path.exists(proof_path):
+            os.remove(proof_path)
+    conn.execute("DELETE FROM attendance_logs WHERE id = ?", (log_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True})
+
+
 @app.route("/api/logs/clear", methods=["DELETE"])
 def clear_logs():
     conn = get_db()
@@ -446,6 +492,15 @@ def clear_logs():
     conn.commit()
     conn.close()
     return jsonify({"success": True, "message": "All attendance logs cleared."})
+
+
+@app.route("/api/spoofs/clear", methods=["DELETE"])
+def clear_spoofs():
+    conn = get_db()
+    conn.execute("DELETE FROM spoof_attempts")
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True})
 
 
 @app.route("/api/export_csv", methods=["GET"])
