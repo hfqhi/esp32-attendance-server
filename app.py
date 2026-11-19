@@ -4,6 +4,7 @@ import json
 import os
 import socket
 import sqlite3
+import sys
 import time
 import urllib.request
 from datetime import datetime
@@ -101,16 +102,37 @@ def register_esp32():
     return jsonify({"success": True, "ip": ip_addr, "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
 
 
+@app.route("/api/esp32/connect_ip", methods=["POST"])
+def connect_esp32_by_ip():
+    data = request.json or {}
+    target_ip = data.get("ip", "").strip().replace("http://", "").replace("https://", "").split("/")[0]
+    if not target_ip:
+        return jsonify({"success": False, "message": "Enter the ESP32-CAM IP address."}), 400
+
+    try:
+        with urllib.request.urlopen(f"http://{target_ip}/capture", timeout=3) as resp:
+            if resp.status == 200:
+                esp32_node["ip"] = target_ip
+                esp32_node["last_seen"] = time.time()
+                return jsonify({"success": True, "message": f"Connected to ESP32-CAM at {target_ip}."})
+    except Exception as exc:
+        return jsonify({"success": False, "message": f"Cannot reach http://{target_ip}: {exc}"}), 502
+
+    return jsonify({"success": False, "message": "ESP32-CAM did not respond."}), 502
+
+
 @app.route("/api/esp32/wifi_config", methods=["POST"])
 def configure_esp32_wifi():
+    data = request.json or {}
     status = get_esp32_status()
-    if not status["online"]:
+    target_ip = data.get("esp_ip", "").strip() or status["ip"]
+
+    if not target_ip:
         return jsonify({
             "success": False,
-            "message": "ESP32-CAM is offline. If unconfigured, connect to Wi-Fi 'ES-SEE-CAM-Setup' and open http://192.168.4.1"
+            "message": "ESP32-CAM is offline. Connect to Wi-Fi 'ES-SEE-CAM-Setup' and open http://192.168.4.1"
         }), 503
 
-    data = request.json or {}
     ssid = data.get("ssid", "").strip()
     password = data.get("password", "")
     server_url = data.get("server_url", "").strip() or f"http://{get_local_lan_ip()}:5000"
@@ -125,7 +147,7 @@ def configure_esp32_wifi():
             "server_url": server_url,
         }).encode("utf-8")
         req = urllib.request.Request(
-            f"http://{status['ip']}/wifi_config",
+            f"http://{target_ip}/wifi_config",
             data=payload,
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -134,7 +156,7 @@ def configure_esp32_wifi():
             result = json.loads(resp.read().decode("utf-8"))
         return jsonify(result)
     except Exception as exc:
-        return jsonify({"success": False, "message": f"Failed to reach ESP32-CAM: {exc}"}), 502
+        return jsonify({"success": False, "message": f"Failed to reach ESP32-CAM ({target_ip}): {exc}"}), 502
 
 
 @app.route("/api/esp32/proxy_capture", methods=["GET"])
@@ -580,7 +602,15 @@ def export_csv():
 
 if __name__ == "__main__":
     lan_ip = get_local_lan_ip()
+    use_https = "--https" in sys.argv
+    proto = "https" if use_https else "http"
+
     print(f"\n=== ES-SEE Attendance System ===")
-    print(f"Desktop URL : http://localhost:5000")
-    print(f"Phone URL   : http://{lan_ip}:5000 (Connect phone to same Wi-Fi)\n")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    print(f"Desktop URL : {proto}://localhost:5000")
+    print(f"Phone URL   : {proto}://{lan_ip}:5000 (Connect phone to same Wi-Fi)")
+    print(f"ESP32 Server: http://{lan_ip}:5000\n")
+
+    if use_https:
+        app.run(host="0.0.0.0", port=5000, debug=True, ssl_context="adhoc")
+    else:
+        app.run(host="0.0.0.0", port=5000, debug=True)
