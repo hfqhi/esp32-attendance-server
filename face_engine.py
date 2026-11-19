@@ -1,8 +1,7 @@
 import base64
 import os
-import random
-import time
 import urllib.request
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -11,6 +10,7 @@ from database import get_db
 
 os.makedirs("models", exist_ok=True)
 os.makedirs("enrolled_faces", exist_ok=True)
+os.makedirs("captured_proofs", exist_ok=True)
 
 YUNET_PATH = "models/face_detection_yunet_2023mar.onnx"
 SFACE_PATH = "models/face_recognition_sface_2021dec.onnx"
@@ -25,27 +25,31 @@ for path, url in MODELS.items():
         print(f"Downloading {path}...")
         urllib.request.urlretrieve(url, path)
 
-detector = cv2.FaceDetectorYN.create(YUNET_PATH, "", (320, 320), 0.80, 0.3, 5000)
+# 0.72 detection score threshold prevents missed detections on OV2640 indoor frames
+detector = cv2.FaceDetectorYN.create(YUNET_PATH, "", (320, 320), 0.72, 0.3, 5000)
 recognizer = cv2.FaceRecognizerSF.create(SFACE_PATH, "")
 
 COSINE_THRESHOLDS = {
-    "esp32": 0.285,
-    "webcam": 0.363,
+    "esp32": 0.265,
+    "webcam": 0.360,
 }
 
+# Passive anti-spoof Laplacian sharpness threshold (detects flat phone screens / printed photos)
 TEXTURE_THRESHOLDS = {
-    "esp32": 11.0,
-    "webcam": 32.0,
+    "esp32": 9.5,
+    "webcam": 28.0,
 }
 
-liveness_state = {
-    "student_id": None,
-    "challenge": None,
-    "baseline_smile": 0.0,
-    "baseline_yaw": 1.0,
-    "timestamp": 0.0,
+recognition_state = {
     "unknown_streak": 0,
+    "last_spoof_ts": 0.0,
 }
+
+
+def sanitize_slug(text):
+    clean = "_".join(str(text).strip().split())
+    clean = "".join(c for c in clean if c.isalnum() or c in ("-", "_"))
+    return clean or "General"
 
 
 def decode_image(data_url_or_bytes):
@@ -60,16 +64,15 @@ def decode_image(data_url_or_bytes):
 
 
 def enhance_indoor_frame(frame, source="webcam"):
-    """Applies LAB-space CLAHE luminance normalization + bilateral denoising for indoor QVGA ESP32-CAM frames."""
+    """Normalizes indoor OV2640 luminance gently while preserving facial edges."""
     if frame is None or source != "esp32":
         return frame
 
     lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
     l_chan, a_chan, b_chan = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=2.6, tileGridSize=(8, 8))
+    clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
     l_eq = clahe.apply(l_chan)
-    enhanced = cv2.cvtColor(cv2.merge((l_eq, a_chan, b_chan)), cv2.COLOR_LAB2BGR)
-    return cv2.bilateralFilter(enhanced, d=5, sigmaColor=35, sigmaSpace=35)
+    return cv2.cvtColor(cv2.merge((l_eq, a_chan, b_chan)), cv2.COLOR_LAB2BGR)
 
 
 def save_reference_portrait(image_data, student_id, full_name):
@@ -77,12 +80,37 @@ def save_reference_portrait(image_data, student_id, full_name):
     frame = decode_image(image_data)
     if frame is None:
         return None
-    safe_id = "".join(c for c in student_id if c.isalnum() or c in ("-", "_"))
-    safe_name = "_".join(full_name.split())
-    safe_name = "".join(c for c in safe_name if c.isalnum() or c in ("-", "_"))
+    safe_id = sanitize_slug(student_id)
+    safe_name = sanitize_slug(full_name)
     filename = f"{safe_id}_{safe_name}.jpg"
     cv2.imwrite(os.path.join("enrolled_faces", filename), frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
     return filename
+
+
+def save_proof_snapshot(frame, student_name, subject_code, is_spoof=False):
+    """Saves attendance or spoof proof sorted by Day / Date / SubjectCode."""
+    if frame is None:
+        return ""
+    now = datetime.now()
+    day_name = now.strftime("%A")
+    date_iso = now.strftime("%Y-%m-%d")
+    time_slug = now.strftime("%I-%M-%S%p")
+
+    if is_spoof:
+        rel_dir = os.path.join("spoof_alerts", day_name, date_iso)
+    else:
+        subj_slug = sanitize_slug(subject_code or "General")
+        rel_dir = os.path.join(day_name, date_iso, subj_slug)
+
+    abs_dir = os.path.join("captured_proofs", rel_dir)
+    os.makedirs(abs_dir, exist_ok=True)
+
+    stu_slug = sanitize_slug(student_name)
+    subj_tag = sanitize_slug(subject_code or "ATT")
+    fname = f"{stu_slug}_{subj_tag}_{date_iso}_{time_slug}.jpg"
+    abs_path = os.path.join(abs_dir, fname)
+    cv2.imwrite(abs_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 88])
+    return os.path.join(rel_dir, fname).replace("\\", "/")
 
 
 def get_enrolled_embeddings():
@@ -132,21 +160,15 @@ def extract_face_feature(image_data, exclude_student_id=None, source="webcam"):
     return feature, None
 
 
-def analyze_liveness(frame, face):
+def compute_face_texture(frame, face):
     x, y, w, h = map(int, face[:4])
     x, y = max(0, x), max(0, y)
     crop = frame[y:y+h, x:x+w]
-    texture = 0.0
-    if crop.size > 0:
-        normalized_crop = cv2.resize(crop, (112, 112), interpolation=cv2.INTER_AREA)
-        gray = cv2.cvtColor(normalized_crop, cv2.COLOR_BGR2GRAY)
-        texture = cv2.Laplacian(gray, cv2.CV_64F).var()
-
-    re_x, le_x, nose_x, rm_x, lm_x = face[4], face[6], face[8], face[10], face[12]
-    eye_dist = abs(le_x - re_x) + 1e-5
-    smile_ratio = abs(lm_x - rm_x) / eye_dist
-    yaw_ratio = abs(nose_x - re_x) / (abs(le_x - nose_x) + 1e-5)
-    return texture, smile_ratio, yaw_ratio
+    if crop.size == 0:
+        return 0.0
+    normalized_crop = cv2.resize(crop, (112, 112), interpolation=cv2.INTER_AREA)
+    gray = cv2.cvtColor(normalized_crop, cv2.COLOR_BGR2GRAY)
+    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
 
 def match_best_student(frame, source="webcam"):
@@ -157,7 +179,8 @@ def match_best_student(frame, source="webcam"):
     if faces is None or len(faces) == 0:
         return None, None
 
-    face = faces[0]
+    # Pick the largest face in frame
+    face = max(faces, key=lambda f: f[2] * f[3])
     aligned = recognizer.alignCrop(frame, face)
     feature = recognizer.feature(aligned)
     cosine_thresh = COSINE_THRESHOLDS.get(source, COSINE_THRESHOLDS["webcam"])
@@ -175,79 +198,45 @@ def match_best_student(frame, source="webcam"):
 
 
 def identify_offline_face(image_bytes):
-    """Matches a single queued offline JPEG without requiring interactive challenge."""
+    """Matches a buffered offline JPEG against enrolled students."""
     raw_frame = decode_image(image_bytes)
     if raw_frame is None:
-        return None
+        return None, None
     frame = enhance_indoor_frame(raw_frame, source="esp32")
     _, best_student = match_best_student(frame, source="esp32")
-    return best_student
+    return best_student, raw_frame
 
 
-def verify_and_check_liveness(image_data, source="webcam"):
+def verify_instant_presence(image_data, source="webcam"):
+    """Instant single-frame recognition with passive photo-spoof detection."""
     raw_frame = decode_image(image_data)
     if raw_frame is None:
-        return {"status": "ERROR", "message": "Invalid camera frame"}, None
+        return {"status": "ERROR", "message": "Invalid camera frame"}, None, None
 
     frame = enhance_indoor_frame(raw_frame, source=source)
     face, best_student = match_best_student(frame, source=source)
+
     if face is None:
-        liveness_state["student_id"] = None
-        liveness_state["unknown_streak"] = 0
-        return {"status": "NO_FACE", "message": "Ready to Scan"}, None
+        recognition_state["unknown_streak"] = 0
+        return {"status": "NO_FACE", "message": "Ready to Scan"}, None, None
 
     if not best_student:
-        liveness_state["unknown_streak"] += 1
-        # Debounce single-frame motion blur before declaring Unregistered Face
-        if liveness_state["unknown_streak"] < 2:
-            return {"status": "NO_FACE", "message": "Aligning Face..."}, None
-        liveness_state["student_id"] = None
-        return {"status": "UNKNOWN", "message": "Unregistered Face — Access Denied"}, None
+        recognition_state["unknown_streak"] += 1
+        if recognition_state["unknown_streak"] < 2:
+            return {"status": "NO_FACE", "message": "Scanning Face..."}, None, None
+        return {"status": "UNKNOWN", "message": "Unregistered Face — Access Denied"}, None, None
 
-    liveness_state["unknown_streak"] = 0
+    recognition_state["unknown_streak"] = 0
 
+    # Passive anti-spoof check: detect flat photo / phone screen replay
     min_texture = TEXTURE_THRESHOLDS.get(source, TEXTURE_THRESHOLDS["webcam"])
-    texture, smile_ratio, yaw_ratio = analyze_liveness(frame, face)
+    texture = compute_face_texture(frame, face)
     if texture < min_texture:
         return {
             "status": "SPOOF",
-            "message": f"Spoof Blocked — Low Texture ({texture:.1f} < {min_texture:.0f})"
-        }, None
-
-    now_ts = time.time()
-    sid = best_student["student_id"]
-
-    if liveness_state["student_id"] != sid or (now_ts - liveness_state["timestamp"] > 6.0):
-        challenge = random.choice(["SMILE", "TURN_HEAD"])
-        liveness_state.update({
-            "student_id": sid,
-            "challenge": challenge,
-            "baseline_smile": smile_ratio,
-            "baseline_yaw": yaw_ratio,
-            "timestamp": now_ts,
-        })
-        prompt = "SMILE TO VERIFY" if challenge == "SMILE" else "TURN HEAD SLIGHTLY"
-        return {
-            "status": "CHALLENGE",
             "student_name": best_student["full_name"],
-            "message": f"{best_student['full_name']} • {prompt}"
-        }, None
+            "texture_score": round(texture, 1),
+            "message": f"Image/Screen Spoof Blocked ({best_student['full_name']})"
+        }, None, raw_frame
 
-    passed = False
-    if liveness_state["challenge"] == "SMILE" and smile_ratio > liveness_state["baseline_smile"] * 1.10:
-        passed = True
-    elif liveness_state["challenge"] == "TURN_HEAD" and (
-        yaw_ratio > liveness_state["baseline_yaw"] * 1.30 or yaw_ratio < liveness_state["baseline_yaw"] * 0.72
-    ):
-        passed = True
-
-    if not passed:
-        prompt = "SMILE TO VERIFY" if liveness_state["challenge"] == "SMILE" else "TURN HEAD SLIGHTLY"
-        return {
-            "status": "CHALLENGE",
-            "student_name": best_student["full_name"],
-            "message": f"{best_student['full_name']} • {prompt}"
-        }, None
-
-    liveness_state["student_id"] = None
-    return None, best_student
+    return None, best_student, raw_frame
