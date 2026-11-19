@@ -29,7 +29,10 @@ detector = cv2.FaceDetectorYN.create(YUNET_PATH, "", (320, 320), 0.9, 0.3, 5000)
 recognizer = cv2.FaceRecognizerSF.create(SFACE_PATH, "")
 
 COSINE_THRESHOLD = 0.363
-MIN_TEXTURE_SCORE = 35.0
+TEXTURE_THRESHOLDS = {
+    "esp32": 14.0,
+    "webcam": 32.0,
+}
 
 liveness_state = {
     "student_id": None,
@@ -38,6 +41,7 @@ liveness_state = {
     "baseline_yaw": 1.0,
     "timestamp": 0.0,
 }
+
 
 def decode_image(data_url_or_bytes):
     if isinstance(data_url_or_bytes, str):
@@ -48,6 +52,7 @@ def decode_image(data_url_or_bytes):
         img_bytes = data_url_or_bytes
     np_arr = np.frombuffer(img_bytes, np.uint8)
     return cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
 
 def save_reference_portrait(image_data, student_id, full_name):
     """Saves a clean JPEG portrait in enrolled_faces/ for ESP32-CAM SD syncing."""
@@ -60,6 +65,7 @@ def save_reference_portrait(image_data, student_id, full_name):
     filename = f"{safe_id}_{safe_name}.jpg"
     cv2.imwrite(os.path.join("enrolled_faces", filename), frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
     return filename
+
 
 def get_enrolled_embeddings():
     conn = get_db()
@@ -76,6 +82,7 @@ def get_enrolled_embeddings():
                 "embedding": np.load(emb_path),
             })
     return records
+
 
 def extract_face_feature(image_data, exclude_student_id=None):
     frame = decode_image(image_data)
@@ -104,13 +111,15 @@ def extract_face_feature(image_data, exclude_student_id=None):
 
     return feature, None
 
+
 def analyze_liveness(frame, face):
     x, y, w, h = map(int, face[:4])
     x, y = max(0, x), max(0, y)
     crop = frame[y:y+h, x:x+w]
     texture = 0.0
     if crop.size > 0:
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        normalized_crop = cv2.resize(crop, (112, 112), interpolation=cv2.INTER_AREA)
+        gray = cv2.cvtColor(normalized_crop, cv2.COLOR_BGR2GRAY)
         texture = cv2.Laplacian(gray, cv2.CV_64F).var()
 
     re_x, le_x, nose_x, rm_x, lm_x = face[4], face[6], face[8], face[10], face[12]
@@ -118,6 +127,7 @@ def analyze_liveness(frame, face):
     smile_ratio = abs(lm_x - rm_x) / eye_dist
     yaw_ratio = abs(nose_x - re_x) / (abs(le_x - nose_x) + 1e-5)
     return texture, smile_ratio, yaw_ratio
+
 
 def match_best_student(frame):
     h, w, _ = frame.shape
@@ -142,6 +152,7 @@ def match_best_student(frame):
 
     return face, best_student
 
+
 def identify_offline_face(image_bytes):
     """Matches a single queued offline JPEG without requiring interactive challenge."""
     frame = decode_image(image_bytes)
@@ -150,7 +161,8 @@ def identify_offline_face(image_bytes):
     _, best_student = match_best_student(frame)
     return best_student
 
-def verify_and_check_liveness(image_data):
+
+def verify_and_check_liveness(image_data, source="webcam"):
     frame = decode_image(image_data)
     if frame is None:
         return {"status": "ERROR", "message": "Invalid camera frame"}, None
@@ -164,9 +176,13 @@ def verify_and_check_liveness(image_data):
         liveness_state["student_id"] = None
         return {"status": "UNKNOWN", "message": "Unregistered Face — Access Denied"}, None
 
+    min_texture = TEXTURE_THRESHOLDS.get(source, TEXTURE_THRESHOLDS["webcam"])
     texture, smile_ratio, yaw_ratio = analyze_liveness(frame, face)
-    if texture < MIN_TEXTURE_SCORE:
-        return {"status": "SPOOF", "message": "Spoof Blocked — Low Texture"}, None
+    if texture < min_texture:
+        return {
+            "status": "SPOOF",
+            "message": f"Spoof Blocked — Low Texture ({texture:.1f} < {min_texture:.0f})"
+        }, None
 
     now_ts = time.time()
     sid = best_student["student_id"]

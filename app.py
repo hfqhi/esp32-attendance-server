@@ -32,6 +32,7 @@ esp32_node = {
     "last_seen": 0.0,
 }
 
+
 def get_esp32_status():
     online = bool(esp32_node["ip"] and (time.time() - esp32_node["last_seen"] < 15.0))
     return {
@@ -41,9 +42,11 @@ def get_esp32_status():
         "capture_url": f"http://{esp32_node['ip']}/capture" if online else None,
     }
 
+
 @app.route("/")
 def index():
     return render_template("index.html")
+
 
 # --- ESP32-CAM DEVICE ENDPOINTS ---
 @app.route("/api/esp32/register", methods=["POST"])
@@ -53,6 +56,7 @@ def register_esp32():
     esp32_node["ip"] = ip_addr
     esp32_node["last_seen"] = time.time()
     return jsonify({"success": True, "ip": ip_addr, "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+
 
 @app.route("/api/esp32/proxy_capture", methods=["GET"])
 def proxy_esp32_capture():
@@ -67,6 +71,7 @@ def proxy_esp32_capture():
     except Exception as exc:
         return jsonify({"success": False, "message": str(exc)}), 502
 
+
 @app.route("/api/esp32/enrolled_portraits", methods=["GET"])
 def list_enrolled_portraits():
     """Lists stored reference JPEG portraits so ESP32-CAM can mirror them onto its SD card."""
@@ -76,9 +81,11 @@ def list_enrolled_portraits():
     ]
     return jsonify({"portraits": sorted(files)})
 
+
 @app.route("/api/esp32/portraits/<path:filename>", methods=["GET"])
 def download_portrait(filename):
     return send_from_directory("enrolled_faces", filename)
+
 
 @app.route("/api/esp32/sync_offline", methods=["POST"])
 def sync_offline_capture():
@@ -123,6 +130,7 @@ def sync_offline_capture():
         "message": f"Synced {student['full_name']}",
     })
 
+
 # --- DASHBOARD DATA & CRUD ---
 @app.route("/api/dashboard_data", methods=["GET"])
 def dashboard_data():
@@ -156,6 +164,7 @@ def dashboard_data():
         "pending_absences": get_ended_classes_with_missing_students(),
         "esp32": get_esp32_status(),
     })
+
 
 @app.route("/api/enroll", methods=["POST"])
 def enroll_student():
@@ -196,6 +205,7 @@ def enroll_student():
     conn.close()
 
     return jsonify({"success": True, "message": f"{full_name} ({student_id}) enrolled."})
+
 
 @app.route("/api/students/<original_id>", methods=["PUT"])
 def update_student(original_id):
@@ -256,6 +266,7 @@ def update_student(original_id):
     conn.close()
     return jsonify({"success": True, "message": f"Updated {full_name} ({new_id})."})
 
+
 @app.route("/api/students/<student_id>", methods=["DELETE"])
 def delete_student(student_id):
     conn = get_db()
@@ -272,6 +283,7 @@ def delete_student(student_id):
         conn.commit()
     conn.close()
     return jsonify({"success": True})
+
 
 @app.route("/api/schedules", methods=["POST"])
 def add_schedule():
@@ -295,6 +307,7 @@ def add_schedule():
     conn.commit()
     conn.close()
     return jsonify({"success": True, "message": f"Added {subject_code} ({day_of_week})."})
+
 
 @app.route("/api/schedules/<int:sched_id>", methods=["PUT"])
 def update_schedule(sched_id):
@@ -327,6 +340,7 @@ def update_schedule(sched_id):
     conn.close()
     return jsonify({"success": True, "message": f"Updated {subject_code} ({day_of_week})."})
 
+
 @app.route("/api/schedules/<int:sched_id>", methods=["DELETE"])
 def delete_schedule(sched_id):
     conn = get_db()
@@ -335,6 +349,7 @@ def delete_schedule(sched_id):
     conn.close()
     return jsonify({"success": True})
 
+
 @app.route("/api/verify_frame", methods=["POST"])
 def verify_frame():
     override_subject = None
@@ -342,11 +357,13 @@ def verify_frame():
         data = request.json
         raw_image = data.get("image", "")
         override_subject = data.get("override_subject") or None
+        camera_source = data.get("source", "webcam")
     else:
         raw_image = request.data
+        camera_source = request.headers.get("X-Camera-Source", "esp32")
         esp32_node["last_seen"] = time.time()
 
-    pending_response, verified_student = verify_and_check_liveness(raw_image)
+    pending_response, verified_student = verify_and_check_liveness(raw_image, source=camera_source)
     if pending_response:
         status_code = 400 if pending_response.get("status") == "ERROR" else 200
         return jsonify(pending_response), status_code
@@ -389,6 +406,7 @@ def verify_frame():
         "message": msg
     })
 
+
 @app.route("/api/mark_absences", methods=["POST"])
 def mark_absences():
     subject = request.json.get("subject", "").strip()
@@ -418,6 +436,7 @@ def mark_absences():
     conn.close()
     return jsonify({"success": True, "message": f"Marked {added} student(s) ABSENT for {subject}."})
 
+
 @app.route("/api/logs/clear", methods=["DELETE"])
 def clear_logs():
     conn = get_db()
@@ -425,6 +444,7 @@ def clear_logs():
     conn.commit()
     conn.close()
     return jsonify({"success": True, "message": "All attendance logs cleared."})
+
 
 @app.route("/api/export_csv", methods=["GET"])
 def export_csv():
@@ -472,6 +492,7 @@ def export_csv():
         mimetype="text/csv; charset=utf-8",
         headers={"Content-Disposition": f"attachment;filename={filename}"},
     )
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
