@@ -25,24 +25,21 @@ for path, url in MODELS.items():
         print(f"Downloading {path}...")
         urllib.request.urlretrieve(url, path)
 
-# 0.72 detection score threshold prevents missed detections on OV2640 indoor frames
 detector = cv2.FaceDetectorYN.create(YUNET_PATH, "", (320, 320), 0.72, 0.3, 5000)
 recognizer = cv2.FaceRecognizerSF.create(SFACE_PATH, "")
 
 COSINE_THRESHOLDS = {
-    "esp32": 0.265,
+    "esp32": 0.275,
     "webcam": 0.360,
 }
 
-# Passive anti-spoof Laplacian sharpness threshold (detects flat phone screens / printed photos)
 TEXTURE_THRESHOLDS = {
-    "esp32": 9.5,
+    "esp32": 10.0,
     "webcam": 28.0,
 }
 
 recognition_state = {
     "unknown_streak": 0,
-    "last_spoof_ts": 0.0,
 }
 
 
@@ -64,13 +61,13 @@ def decode_image(data_url_or_bytes):
 
 
 def enhance_indoor_frame(frame, source="webcam"):
-    """Normalizes indoor OV2640 luminance gently while preserving facial edges."""
+    """Subtle luminance balancing that preserves true OV2640 colors for detection."""
     if frame is None or source != "esp32":
         return frame
 
     lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
     l_chan, a_chan, b_chan = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
+    clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
     l_eq = clahe.apply(l_chan)
     return cv2.cvtColor(cv2.merge((l_eq, a_chan, b_chan)), cv2.COLOR_LAB2BGR)
 
@@ -83,12 +80,12 @@ def save_reference_portrait(image_data, student_id, full_name):
     safe_id = sanitize_slug(student_id)
     safe_name = sanitize_slug(full_name)
     filename = f"{safe_id}_{safe_name}.jpg"
-    cv2.imwrite(os.path.join("enrolled_faces", filename), frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    cv2.imwrite(os.path.join("enrolled_faces", filename), frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
     return filename
 
 
 def save_proof_snapshot(frame, student_name, subject_code, is_spoof=False):
-    """Saves attendance or spoof proof sorted by Day / Date / SubjectCode."""
+    """Saves true-color attendance or spoof proof sorted by Day / Date / SubjectCode."""
     if frame is None:
         return ""
     now = datetime.now()
@@ -109,7 +106,7 @@ def save_proof_snapshot(frame, student_name, subject_code, is_spoof=False):
     subj_tag = sanitize_slug(subject_code or "ATT")
     fname = f"{stu_slug}_{subj_tag}_{date_iso}_{time_slug}.jpg"
     abs_path = os.path.join(abs_dir, fname)
-    cv2.imwrite(abs_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 88])
+    cv2.imwrite(abs_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
     return os.path.join(rel_dir, fname).replace("\\", "/")
 
 
@@ -179,7 +176,6 @@ def match_best_student(frame, source="webcam"):
     if faces is None or len(faces) == 0:
         return None, None
 
-    # Pick the largest face in frame
     face = max(faces, key=lambda f: f[2] * f[3])
     aligned = recognizer.alignCrop(frame, face)
     feature = recognizer.feature(aligned)
@@ -198,7 +194,6 @@ def match_best_student(frame, source="webcam"):
 
 
 def identify_offline_face(image_bytes):
-    """Matches a buffered offline JPEG against enrolled students."""
     raw_frame = decode_image(image_bytes)
     if raw_frame is None:
         return None, None
@@ -208,7 +203,6 @@ def identify_offline_face(image_bytes):
 
 
 def verify_instant_presence(image_data, source="webcam"):
-    """Instant single-frame recognition with passive photo-spoof detection."""
     raw_frame = decode_image(image_data)
     if raw_frame is None:
         return {"status": "ERROR", "message": "Invalid camera frame"}, None, None
@@ -228,7 +222,6 @@ def verify_instant_presence(image_data, source="webcam"):
 
     recognition_state["unknown_streak"] = 0
 
-    # Passive anti-spoof check: detect flat photo / phone screen replay
     min_texture = TEXTURE_THRESHOLDS.get(source, TEXTURE_THRESHOLDS["webcam"])
     texture = compute_face_texture(frame, face)
     if texture < min_texture:
