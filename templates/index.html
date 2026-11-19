@@ -171,7 +171,7 @@
               </div>
 
               <div
-                class="relative bg-black rounded-xl overflow-hidden aspect-video flex items-center justify-center border border-slate-800/90"
+                class="relative bg-black rounded-xl overflow-hidden aspect-[4/3] flex items-center justify-center border border-slate-800/90"
               >
                 <video
                   id="kioskVideo"
@@ -183,7 +183,7 @@
                 <img
                   id="kioskEspImg"
                   alt="ESP32-CAM Feed"
-                  class="w-full h-full object-cover hidden"
+                  class="w-full h-full object-contain hidden"
                 />
                 <canvas id="kioskCanvas" class="hidden"></canvas>
 
@@ -268,7 +268,7 @@
             />
             <div
               id="recentFeed"
-              class="space-y-2.5 overflow-y-auto flex-1 max-h-[430px] pr-1 text-sm"
+              class="space-y-2.5 overflow-y-auto flex-1 max-h-[520px] pr-1 text-sm"
             ></div>
           </div>
         </div>
