@@ -1,6 +1,8 @@
 import csv
 import io
+import json
 import os
+import socket
 import sqlite3
 import time
 import urllib.request
@@ -19,6 +21,7 @@ from database import (
 from face_engine import (
     extract_face_feature,
     identify_offline_face,
+    sanitize_slug,
     save_proof_snapshot,
     save_reference_portrait,
     verify_instant_presence,
@@ -29,8 +32,22 @@ init_db()
 
 esp32_node = {
     "ip": None,
+    "ssid": "",
+    "server_url": "",
     "last_seen": 0.0,
 }
+
+
+def get_local_lan_ip():
+    """Detects the laptop's active Wi-Fi IPv4 address for phone access."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.connect(("8.8.8.8", 80))
+        ip = sock.getsockname()[0]
+        sock.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
 
 
 def get_esp32_status():
@@ -38,9 +55,23 @@ def get_esp32_status():
     return {
         "online": online,
         "ip": esp32_node["ip"] if online else None,
+        "ssid": esp32_node["ssid"] if online else "",
+        "server_url": esp32_node["server_url"] if online else f"http://{get_local_lan_ip()}:5000",
         "stream_url": f"http://{esp32_node['ip']}:81/stream" if online else None,
         "capture_url": f"http://{esp32_node['ip']}/capture" if online else None,
     }
+
+
+def resolve_student_photo_url(student_id, full_name):
+    safe_id = sanitize_slug(student_id)
+    safe_name = sanitize_slug(full_name)
+    exact = f"{safe_id}_{safe_name}.jpg"
+    if os.path.exists(os.path.join("enrolled_faces", exact)):
+        return f"/enrolled_portraits/{exact}"
+    for fname in os.listdir("enrolled_faces"):
+        if fname.startswith(f"{safe_id}_") and fname.lower().endswith(".jpg"):
+            return f"/enrolled_portraits/{fname}"
+    return ""
 
 
 @app.route("/")
@@ -53,14 +84,57 @@ def serve_proof_image(filename):
     return send_from_directory("captured_proofs", filename)
 
 
+@app.route("/enrolled_portraits/<path:filename>", methods=["GET"])
+def serve_enrolled_portrait(filename):
+    return send_from_directory("enrolled_faces", filename)
+
+
 # --- ESP32-CAM DEVICE ENDPOINTS ---
 @app.route("/api/esp32/register", methods=["POST"])
 def register_esp32():
     data = request.json or {}
     ip_addr = data.get("ip") or request.remote_addr
     esp32_node["ip"] = ip_addr
+    esp32_node["ssid"] = data.get("ssid", esp32_node["ssid"])
+    esp32_node["server_url"] = data.get("server_url", esp32_node["server_url"])
     esp32_node["last_seen"] = time.time()
     return jsonify({"success": True, "ip": ip_addr, "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+
+
+@app.route("/api/esp32/wifi_config", methods=["POST"])
+def configure_esp32_wifi():
+    status = get_esp32_status()
+    if not status["online"]:
+        return jsonify({
+            "success": False,
+            "message": "ESP32-CAM is offline. If unconfigured, connect to Wi-Fi 'ES-SEE-CAM-Setup' and open http://192.168.4.1"
+        }), 503
+
+    data = request.json or {}
+    ssid = data.get("ssid", "").strip()
+    password = data.get("password", "")
+    server_url = data.get("server_url", "").strip() or f"http://{get_local_lan_ip()}:5000"
+
+    if not ssid:
+        return jsonify({"success": False, "message": "Wi-Fi SSID is required."}), 400
+
+    try:
+        payload = json.dumps({
+            "ssid": ssid,
+            "password": password,
+            "server_url": server_url,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"http://{status['ip']}/wifi_config",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"success": False, "message": f"Failed to reach ESP32-CAM: {exc}"}), 502
 
 
 @app.route("/api/esp32/proxy_capture", methods=["GET"])
@@ -138,7 +212,10 @@ def dashboard_data():
     auto_mark_ended_classes()
 
     conn = get_db()
-    students = [dict(r) for r in conn.execute("SELECT * FROM students ORDER BY full_name").fetchall()]
+    raw_students = [dict(r) for r in conn.execute("SELECT * FROM students ORDER BY full_name").fetchall()]
+    for s in raw_students:
+        s["photo_url"] = resolve_student_photo_url(s["student_id"], s["full_name"])
+
     schedules = [dict(r) for r in conn.execute("""
         SELECT * FROM schedules
         ORDER BY CASE day_of_week
@@ -158,13 +235,15 @@ def dashboard_data():
     active_code, active_subject, _ = get_active_schedule()
     today_name = datetime.now().strftime("%A")
     active_label = f"{active_code} • {active_subject}" if active_subject else f"No Active Class ({today_name})"
+    lan_ip = get_local_lan_ip()
 
     return jsonify({
-        "students": students,
+        "students": raw_students,
         "schedules": schedules,
         "logs": logs,
         "active_subject": active_label,
         "esp32": get_esp32_status(),
+        "mobile_url": f"http://{lan_ip}:5000",
     })
 
 
@@ -252,7 +331,14 @@ def update_student(original_id):
             os.remove(old_emb_path)
         np.save(new_emb_path, feature)
         save_reference_portrait(image_data, new_id, full_name)
-    elif new_id != original_id:
+    elif new_id != original_id or full_name != current_row["full_name"]:
+        old_safe_id = sanitize_slug(original_id)
+        old_safe_name = sanitize_slug(current_row["full_name"])
+        old_jpg = os.path.join("enrolled_faces", f"{old_safe_id}_{old_safe_name}.jpg")
+        new_jpg = os.path.join("enrolled_faces", f"{sanitize_slug(new_id)}_{sanitize_slug(full_name)}.jpg")
+        if os.path.exists(old_jpg) and old_jpg != new_jpg:
+            os.rename(old_jpg, new_jpg)
+
         safe_id = "".join(c for c in new_id if c.isalnum() or c in ("-", "_"))
         emb_filename = f"{safe_id}.npy"
         new_emb_path = os.path.join("enrolled_faces", emb_filename)
@@ -358,11 +444,9 @@ def delete_schedule(sched_id):
 def verify_frame():
     auto_mark_ended_classes()
 
-    override_subject = None
     if request.is_json:
         data = request.json
         raw_image = data.get("image", "")
-        override_subject = data.get("override_subject") or None
         camera_source = data.get("source", "webcam")
     else:
         raw_image = request.data
@@ -374,7 +458,7 @@ def verify_frame():
         status_code = 400 if pending_response.get("status") == "ERROR" else 200
         return jsonify(pending_response), status_code
 
-    subject_code, subject, att_status = get_active_schedule(override_subject)
+    subject_code, subject, att_status = get_active_schedule()
     if not subject:
         today_name = datetime.now().strftime("%A")
         return jsonify({
@@ -495,4 +579,8 @@ def export_csv():
 
 
 if __name__ == "__main__":
+    lan_ip = get_local_lan_ip()
+    print(f"\n=== ES-SEE Attendance System ===")
+    print(f"Desktop URL : http://localhost:5000")
+    print(f"Phone URL   : http://{lan_ip}:5000 (Connect phone to same Wi-Fi)\n")
     app.run(host="0.0.0.0", port=5000, debug=True)
