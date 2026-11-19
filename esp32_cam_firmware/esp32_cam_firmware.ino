@@ -50,7 +50,7 @@ unsigned long lastHeartbeatMs = 0;
 const unsigned long CAPTURE_INTERVAL_MS = 1300;
 const unsigned long HEARTBEAT_INTERVAL_MS = 8000;
 
-// Motion/Presence detection buffer (samples JPEG payload variance & byte signature)
+// Motion/Presence detection buffer
 uint8_t prevSample[64] = {0};
 size_t prevFrameLen = 0;
 RTC_DATA_ATTR uint32_t offlineCounter = 1;
@@ -59,10 +59,10 @@ RTC_DATA_ATTR uint32_t offlineCounter = 1;
 // 2. TIMESTAMP HELPERS
 // ==========================================
 struct TimeStamps {
-  String dateFile;   // 11-18-2026
-  String dateIso;    // 2026-11-18
-  String timeFile;   // 09-15-30PM
-  String timeHuman;  // 09:15:30 PM
+  String dateFile;   // 11-19-2026
+  String dateIso;    // 2026-11-19
+  String timeFile;   // 06-15-30PM
+  String timeHuman;  // 06:15:30 PM
 };
 
 TimeStamps getCurrentTimestamps() {
@@ -79,7 +79,6 @@ TimeStamps getCurrentTimestamps() {
     ts.timeFile = String(tFile);
     ts.timeHuman = String(tHuman);
   } else {
-    // Fallback if booted completely offline with no NTP sync yet
     char idxBuf[16];
     snprintf(idxBuf, sizeof(idxBuf), "SEQ-%04lu", (unsigned long)offlineCounter++);
     ts.dateFile = "Offline_Unsynced";
@@ -101,16 +100,14 @@ String sanitizeName(const String& raw) {
 }
 
 // ==========================================
-// 3. PRESENCE / MOTION GATE (PREVENTS RANDOM EMPTY PICS)
+// 3. PRESENCE / MOTION GATE
 // ==========================================
 bool hasSceneChanged(camera_fb_t* fb) {
   if (!fb || fb->len < 1024) return false;
 
-  // Check JPEG size delta (> 6% change indicates someone stepped in/out of frame)
   long lenDiff = abs((long)fb->len - (long)prevFrameLen);
   bool sizeChanged = (prevFrameLen == 0) || (lenDiff > (long)(prevFrameLen * 0.06));
 
-  // Also sample 64 evenly spaced payload bytes to detect subtle movement
   uint8_t currSample[64];
   size_t step = (fb->len - 512) / 64;
   int diffCount = 0;
@@ -127,7 +124,7 @@ bool hasSceneChanged(camera_fb_t* fb) {
 }
 
 // ==========================================
-// 4. CAMERA & MICROSD SETUP
+// 4. CAMERA (OV2640 TUNED) & MICROSD SETUP
 // ==========================================
 bool initCamera() {
   camera_config_t config;
@@ -152,17 +149,52 @@ bool initCamera() {
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
 
+  // Higher JPEG quality (10) preserves facial edge texture for YuNet & anti-spoof checks
   if (psramFound()) {
     config.frame_size   = FRAMESIZE_VGA;
-    config.jpeg_quality = 12;
+    config.jpeg_quality = 10;
     config.fb_count     = 2;
+    config.grab_mode    = CAMERA_GRAB_LATEST;
   } else {
     config.frame_size   = FRAMESIZE_QVGA;
-    config.jpeg_quality = 14;
+    config.jpeg_quality = 12;
     config.fb_count     = 1;
   }
 
-  return esp_camera_init(&config) == ESP_OK;
+  if (esp_camera_init(&config) != ESP_OK) {
+    return false;
+  }
+
+  // Register-level OV2640 calibration for sharp indoor facial clarity
+  sensor_t* s = esp_camera_sensor_get();
+  if (s != nullptr) {
+    s->set_brightness(s, 1);                  // Slight boost (-2 to 2) for indoor lighting
+    s->set_contrast(s, 1);                    // Sharper facial edge contrast (-2 to 2)
+    s->set_saturation(s, 0);                  // Natural color balance
+    s->set_sharpness(s, 2);                   // Enhance fine edge detail (-2 to 2)
+    s->set_whitebal(s, 1);                    // Enable Auto White Balance
+    s->set_awb_gain(s, 1);                    // Enable AWB Gain
+    s->set_wb_mode(s, 0);                     // Auto WB mode
+    s->set_exposure_ctrl(s, 1);               // Enable Auto Exposure Control
+    s->set_aec2(s, 1);                        // Enable DSP auto-exposure
+    s->set_ae_level(s, 1);                    // Slightly brighter exposure target (-2 to 2)
+    s->set_gain_ctrl(s, 1);                   // Enable Auto Gain Control
+    s->set_gainceiling(s, (gainceiling_t)3);  // GAINCEILING_8X to reduce low-light blur
+    s->set_bpc(s, 1);                         // Black pixel correction
+    s->set_wpc(s, 1);                         // White pixel correction
+    s->set_raw_gma(s, 1);                     // Gamma curve correction
+    s->set_lenc(s, 1);                        // Lens shading correction
+    s->set_dcw(s, 1);                         // Downsize EN
+  }
+
+  // Warm up AEC/AWB registers on initial frames
+  for (int i = 0; i < 4; i++) {
+    camera_fb_t* warmup = esp_camera_fb_get();
+    if (warmup) esp_camera_fb_return(warmup);
+    delay(60);
+  }
+
+  return true;
 }
 
 bool initMicroSD() {
@@ -294,6 +326,7 @@ void syncOfflineQueueToServer() {
         HTTPClient http;
         http.begin(String(SERVER_BASE) + "/api/esp32/sync_offline");
         http.addHeader("Content-Type", "image/jpeg");
+        http.addHeader("X-Camera-Source", "esp32");
         http.setTimeout(4000);
 
         int code = http.POST(buf, fsize);
@@ -317,7 +350,6 @@ void syncOfflineQueueToServer() {
               logAttendanceToSd(stuName, subjCode, "PRESENT", ts);
               Serial.printf("[SYNC] Logged offline capture for %s\n", stuName);
             }
-            // Remove processed file from offline_queue
             SD_MMC.remove(entryPath);
           }
         }
@@ -432,7 +464,6 @@ void loop() {
   camera_fb_t* fb = esp_camera_fb_get();
   if (!fb) return;
 
-  // Gate 1: Skip empty/static frames — zero random photos or spam logs
   if (!hasSceneChanged(fb)) {
     esp_camera_fb_return(fb);
     return;
@@ -449,6 +480,7 @@ void loop() {
   HTTPClient http;
   http.begin(String(SERVER_BASE) + "/api/verify_frame");
   http.addHeader("Content-Type", "image/jpeg");
+  http.addHeader("X-Camera-Source", "esp32");
   http.setTimeout(3500);
 
   int httpCode = http.POST(fb->buf, fb->len);
@@ -463,7 +495,6 @@ void loop() {
 
       Serial.printf("[%s] %s\n", status, message);
 
-      // Only save JPEG & CSV log when an enrolled student is verified & logged
       if (strcmp(status, "LOGGED") == 0) {
         saveVerifiedCapture(fb, stuName, ts);
         logAttendanceToSd(stuName, subjCode, attStat, ts);
@@ -478,7 +509,6 @@ void loop() {
       }
     }
   } else {
-    // Server unreachable even though Wi-Fi is up -> queue to SD card
     saveOfflineQueueCapture(fb, ts);
   }
 
