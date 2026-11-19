@@ -1,625 +1,494 @@
 let kioskStream = null;
 let enrollStream = null;
 let scanInterval = null;
-let espStreamWatchdog = null;
-let isScanning = false;
-let isVerifying = false;
 let uploadedEnrollBase64 = null;
-
-let videoDevices = [];
 let selectedCameraId = "";
-let esp32Info = {
+let esp32Status = {
   online: false,
   ip: null,
-  ssid: "",
-  server_url: "",
   stream_url: null,
   capture_url: null,
 };
-let camPermissionState = "prompt";
+let isVerifyingFrame = false;
 
-function isLocalhostOrSecure() {
-  const host = window.location.hostname;
-  return window.isSecureContext || host === "localhost" || host === "127.0.0.1";
+const LCD_THEMES = {
+  STANDBY: {
+    box: "bg-slate-900 border-slate-800 text-slate-300",
+    dot: "bg-slate-500",
+    tag: "STANDBY",
+  },
+  NO_FACE: {
+    box: "bg-sky-950/50 border-sky-700/60 text-sky-200",
+    dot: "bg-sky-400 animate-pulse",
+    tag: "SCANNING",
+  },
+  LOGGED: {
+    box: "bg-emerald-950/70 border-emerald-500/70 text-emerald-200",
+    dot: "bg-emerald-400",
+    tag: "VERIFIED",
+  },
+  ALREADY_LOGGED: {
+    box: "bg-teal-950/60 border-teal-500/60 text-teal-200",
+    dot: "bg-teal-400",
+    tag: "LOGGED",
+  },
+  UNKNOWN: {
+    box: "bg-rose-950/70 border-rose-500/70 text-rose-200",
+    dot: "bg-rose-400",
+    tag: "UNREGISTERED",
+  },
+  SPOOF: {
+    box: "bg-amber-950/70 border-amber-500/70 text-amber-200",
+    dot: "bg-amber-400",
+    tag: "BLOCKED",
+  },
+  NO_CLASS: {
+    box: "bg-purple-950/60 border-purple-500/60 text-purple-200",
+    dot: "bg-purple-400",
+    tag: "OFF-HOURS",
+  },
+  ERROR: {
+    box: "bg-rose-950/70 border-rose-500/70 text-rose-200",
+    dot: "bg-rose-400",
+    tag: "ERROR",
+  },
+};
+
+function updateLcdBanner(statusKey, message) {
+  const banner = document.getElementById("lcdBanner");
+  const dot = document.getElementById("lcdDot");
+  const msgEl = document.getElementById("lcdMessageText");
+  const tagEl = document.getElementById("lcdStatusTag");
+  if (!banner) return;
+
+  const theme = LCD_THEMES[statusKey] || LCD_THEMES.STANDBY;
+  banner.className = `lcd-banner mt-4 px-4 py-3.5 rounded-xl border font-mono text-sm flex items-center justify-between gap-3 ${theme.box}`;
+  dot.className = `lcd-dot ${theme.dot}`;
+  msgEl.textContent = message;
+  tagEl.textContent = theme.tag;
 }
 
-function updateEsp32CameraStatus(espData) {
-  const wasOnline = esp32Info.online;
-  esp32Info = espData || {
+function updateEsp32CameraStatus(statusObj) {
+  const prevOnline = esp32Status.online;
+  const prevIp = esp32Status.ip;
+  esp32Status = statusObj || {
     online: false,
     ip: null,
-    ssid: "",
-    server_url: "",
     stream_url: null,
     capture_url: null,
   };
 
-  if (
-    !wasOnline &&
-    esp32Info.online &&
-    (!selectedCameraId || videoDevices.length === 0)
-  ) {
-    selectedCameraId = "esp32";
-  }
-
-  renderCameraOptions();
-  updatePermissionBadge();
-}
-
-function renderCameraOptions() {
-  const select = document.getElementById("cameraDeviceSelect");
-  if (!select) return;
-
-  const prev = selectedCameraId;
-  select.innerHTML = "";
-
-  const espOpt = document.createElement("option");
-  espOpt.value = "esp32";
-  espOpt.textContent = esp32Info.online
-    ? `ESP32-CAM (${esp32Info.ip})`
-    : "ESP32-CAM (Offline)";
-  select.appendChild(espOpt);
-
-  if (!isLocalhostOrSecure()) {
-    const phoneOpt = document.createElement("option");
-    phoneOpt.value = "phone_snap";
-    phoneOpt.textContent = "Phone Camera (Photo Capture)";
-    select.appendChild(phoneOpt);
-  }
-
-  videoDevices.forEach((dev, idx) => {
-    const opt = document.createElement("option");
-    opt.value = dev.deviceId;
-    opt.textContent = dev.label || `Device Camera ${idx + 1}`;
-    select.appendChild(opt);
-  });
-
-  if (prev && [...select.options].some((o) => o.value === prev)) {
-    select.value = prev;
-    selectedCameraId = prev;
-  } else if (esp32Info.online) {
-    select.value = "esp32";
-    selectedCameraId = "esp32";
-  } else if (videoDevices.length > 0) {
-    select.value = videoDevices[0].deviceId;
-    selectedCameraId = videoDevices[0].deviceId;
-  } else if (!isLocalhostOrSecure()) {
-    select.value = "phone_snap";
-    selectedCameraId = "phone_snap";
-  } else {
-    select.value = "esp32";
-    selectedCameraId = "esp32";
-  }
-
-  updatePhoneSnapState();
-}
-
-function updatePhoneSnapState() {
-  const snapBtn = document.getElementById("phoneSnapTriggerBtn");
-  const statusText = document.getElementById("cameraStatusText");
-  if (!snapBtn || !statusText || isScanning) return;
-
-  if (selectedCameraId === "phone_snap") {
-    statusText.textContent = "Tap below to verify using your phone camera";
-    snapBtn.classList.remove("hidden");
-  } else {
-    snapBtn.classList.add("hidden");
-    statusText.textContent = "Camera Standby";
-  }
-}
-
-async function refreshVideoDevices() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices)
-    return;
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    videoDevices = devices.filter((d) => d.kind === "videoinput");
-    renderCameraOptions();
-  } catch (err) {
-    console.warn("Unable to enumerate cameras:", err);
-  }
-}
-
-function updatePermissionBadge() {
-  const badge = document.getElementById("camPermissionBadge");
-  if (!badge) return;
-
-  if (selectedCameraId === "esp32") {
-    badge.textContent = esp32Info.online ? "Ready" : "Offline";
-    badge.className = esp32Info.online
-      ? "px-2.5 py-0.5 rounded-md text-[11px] font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
-      : "px-2.5 py-0.5 rounded-md text-[11px] font-medium bg-slate-900 text-slate-400 border border-slate-800";
-    return;
-  }
-
-  if (selectedCameraId === "phone_snap") {
-    badge.textContent = "Phone Cam";
-    badge.className =
-      "px-2.5 py-0.5 rounded-md text-[11px] font-medium bg-indigo-500/15 text-indigo-300 border border-indigo-500/30";
-    return;
-  }
-
-  if (camPermissionState === "granted") {
-    badge.textContent = "Ready";
-    badge.className =
-      "px-2.5 py-0.5 rounded-md text-[11px] font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30";
-  } else if (camPermissionState === "denied") {
-    badge.textContent = "Blocked";
-    badge.className =
-      "px-2.5 py-0.5 rounded-md text-[11px] font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30";
-  } else {
-    badge.textContent = "Standby";
-    badge.className =
-      "px-2.5 py-0.5 rounded-md text-[11px] font-medium bg-slate-900 text-slate-400 border border-slate-800";
+  if (prevOnline !== esp32Status.online || prevIp !== esp32Status.ip) {
+    populateCameraList();
   }
 }
 
 async function initCameraPermissions() {
-  renderCameraOptions();
+  const isLocal = ["localhost", "127.0.0.1", "::1"].includes(
+    window.location.hostname,
+  );
+  const isSecure = window.isSecureContext || isLocal;
+
+  if (!isSecure) {
+    document.getElementById("insecureContextBanner").classList.remove("hidden");
+    document.getElementById("currentOriginLabel").textContent =
+      window.location.origin;
+    document.getElementById("switchLocalhostBtn").href =
+      `http://localhost:${window.location.port || 5000}`;
+    setPermissionUI("blocked", "Localhost or ESP32-CAM required.");
+    await populateCameraList();
+    return;
+  }
 
   if (navigator.permissions && navigator.permissions.query) {
     try {
       const status = await navigator.permissions.query({ name: "camera" });
-      camPermissionState = status.state;
-      status.onchange = () => {
-        camPermissionState = status.state;
-        updatePermissionBadge();
-        if (status.state === "granted") refreshVideoDevices();
-      };
-    } catch (_) {}
-  }
-
-  await refreshVideoDevices();
-  updatePermissionBadge();
-}
-
-async function requestCameraPermission(target) {
-  if (!isLocalhostOrSecure()) {
-    showCameraError(
-      target,
-      "Use 'Phone Camera' mode or start server with --https for live video.",
-    );
-    return false;
-  }
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    showCameraError(target, "Camera API unavailable.");
-    return false;
-  }
-
-  try {
-    const tempStream = await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: false,
-    });
-    tempStream.getTracks().forEach((t) => t.stop());
-    camPermissionState = "granted";
-    await refreshVideoDevices();
-    updatePermissionBadge();
-
-    if (target === "kiosk" && !isScanning) toggleScanner();
-    else if (target === "enroll") startEnrollCamera();
-    return true;
-  } catch (err) {
-    camPermissionState = err.name === "NotAllowedError" ? "denied" : "prompt";
-    updatePermissionBadge();
-    showCameraError(target, "Camera access blocked in browser settings.");
-    return false;
-  }
-}
-
-function showCameraError(target, message) {
-  if (target === "kiosk") {
-    document.getElementById("cameraPlaceholder").classList.remove("hidden");
-    document.getElementById("cameraStatusText").textContent = message;
-    const btn = document.getElementById("kioskGrantPermBtn");
-    if (isLocalhostOrSecure() && selectedCameraId !== "esp32")
-      btn.classList.remove("hidden");
-    else btn.classList.add("hidden");
-  } else {
-    document.getElementById("enrollCamHint").classList.remove("hidden");
-    document.getElementById("enrollCamStatusText").textContent = message;
-    const btn = document.getElementById("enrollGrantPermBtn");
-    if (isLocalhostOrSecure() && selectedCameraId !== "esp32")
-      btn.classList.remove("hidden");
-    else btn.classList.add("hidden");
-  }
-}
-
-async function onCameraDeviceChange() {
-  selectedCameraId = document.getElementById("cameraDeviceSelect").value;
-  renderCameraOptions();
-  updatePermissionBadge();
-
-  if (isScanning) {
-    stopKioskStream();
-    if (selectedCameraId !== "phone_snap") {
-      await toggleScanner();
+      applyPermissionState(status.state);
+      status.onchange = () => applyPermissionState(status.state);
+      return;
+    } catch (_) {
+      // Fallback when Permissions API is unavailable
     }
+  }
+
+  await populateCameraList();
+  setPermissionUI("prompt", "Ready to Scan");
+}
+
+function applyPermissionState(state) {
+  if (state === "granted") {
+    setPermissionUI("granted", "Camera Ready");
+    populateCameraList();
+  } else if (state === "denied") {
+    setPermissionUI("denied", "Camera blocked in browser settings.");
+    populateCameraList();
+  } else {
+    setPermissionUI("prompt", "Click Start Scanner to allow camera.");
+    populateCameraList();
+  }
+}
+
+function setPermissionUI(state, statusMsg) {
+  const badge = document.getElementById("camPermissionBadge");
+  const kioskBtn = document.getElementById("kioskGrantPermBtn");
+  const enrollBtn = document.getElementById("enrollGrantPermBtn");
+
+  document.getElementById("cameraStatusText").textContent = statusMsg;
+  document.getElementById("enrollCamStatusText").textContent = statusMsg;
+
+  if (state === "granted") {
+    badge.textContent = "Ready";
+    badge.className =
+      "px-2.5 py-0.5 rounded-md text-[11px] font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/30";
+    kioskBtn.classList.add("hidden");
+    enrollBtn.classList.add("hidden");
+  } else if (state === "denied" || state === "blocked") {
+    badge.textContent = "Blocked";
+    badge.className =
+      "px-2.5 py-0.5 rounded-md text-[11px] font-medium bg-rose-500/15 text-rose-400 border border-rose-500/30";
+    kioskBtn.classList.toggle("hidden", state === "blocked");
+    enrollBtn.classList.toggle("hidden", state === "blocked");
+  } else {
+    badge.textContent = "Standby";
+    badge.className =
+      "px-2.5 py-0.5 rounded-md text-[11px] font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30";
+    kioskBtn.classList.remove("hidden");
+    enrollBtn.classList.remove("hidden");
+  }
+}
+
+async function populateCameraList() {
+  const select = document.getElementById("cameraDeviceSelect");
+  const prevChoice = selectedCameraId || select.value;
+
+  let videoInputs = [];
+  if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      videoInputs = devices.filter((d) => d.kind === "videoinput");
+    } catch (_) {
+      videoInputs = [];
+    }
+  }
+
+  select.innerHTML = "";
+
+  if (esp32Status.online) {
+    const opt = document.createElement("option");
+    opt.value = "esp32";
+    opt.textContent = `ESP32-CAM (${esp32Status.ip})`;
+    select.appendChild(opt);
+  }
+
+  videoInputs.forEach((cam, idx) => {
+    const opt = document.createElement("option");
+    opt.value = cam.deviceId;
+    opt.textContent = cam.label || `Webcam ${idx + 1}`;
+    select.appendChild(opt);
+  });
+
+  if (select.options.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "Default Webcam";
+    select.appendChild(opt);
+  }
+
+  const stillExists = Array.from(select.options).some(
+    (o) => o.value === prevChoice,
+  );
+  if (stillExists) {
+    select.value = prevChoice;
+    selectedCameraId = prevChoice;
+  } else {
+    selectedCameraId = select.options[0].value;
+    select.value = selectedCameraId;
+  }
+}
+
+function onCameraDeviceChange() {
+  selectedCameraId = document.getElementById("cameraDeviceSelect").value;
+  if (
+    kioskStream ||
+    !document.getElementById("kioskEspImg").classList.contains("hidden")
+  ) {
+    stopKioskStream();
+    startKioskStream();
   }
   if (
     enrollStream ||
     !document.getElementById("enrollEspImg").classList.contains("hidden")
   ) {
-    await startEnrollCamera();
+    stopEnrollStream();
+    startEnrollCamera();
   }
 }
 
-function setLcdBanner(status, message) {
-  const banner = document.getElementById("lcdBanner");
-  const dot = document.getElementById("lcdDot");
-  const msgEl = document.getElementById("lcdMessageText");
-  const tagEl = document.getElementById("lcdStatusTag");
-
-  const styles = {
-    STANDBY: {
-      box: "bg-slate-900 border-slate-800 text-slate-300",
-      dot: "bg-slate-500",
-      tag: "STANDBY",
-    },
-    NO_FACE: {
-      box: "bg-sky-950/30 border-sky-700/50 text-sky-200",
-      dot: "bg-sky-400 animate-pulse",
-      tag: "SCANNING",
-    },
-    LOGGED: {
-      box: "bg-emerald-950/50 border-emerald-500/70 text-emerald-200",
-      dot: "bg-emerald-400",
-      tag: "VERIFIED",
-    },
-    ALREADY_LOGGED: {
-      box: "bg-amber-950/40 border-amber-500/60 text-amber-200",
-      dot: "bg-amber-400",
-      tag: "LOGGED",
-    },
-    UNKNOWN: {
-      box: "bg-rose-950/50 border-rose-500/70 text-rose-200",
-      dot: "bg-rose-500",
-      tag: "UNKNOWN",
-    },
-    SPOOF: {
-      box: "bg-rose-950/60 border-rose-500 text-rose-200",
-      dot: "bg-rose-500 animate-ping",
-      tag: "BLOCKED",
-    },
-    NO_CLASS: {
-      box: "bg-purple-950/40 border-purple-500/60 text-purple-200",
-      dot: "bg-purple-400",
-      tag: "OFF-HOURS",
-    },
-  };
-
-  const current = styles[status] || styles.STANDBY;
-  banner.className = `lcd-banner mt-3.5 sm:mt-4 px-3.5 sm:px-4 py-3 rounded-xl border font-mono text-xs sm:text-sm flex items-center justify-between gap-2.5 ${current.box}`;
-  dot.className = `lcd-dot shrink-0 ${current.dot}`;
-  msgEl.textContent = message;
-  tagEl.textContent = current.tag;
+async function requestCameraPermission(target) {
+  try {
+    const probeStream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: false,
+    });
+    probeStream.getTracks().forEach((t) => t.stop());
+    setPermissionUI("granted", "Camera Ready");
+    await populateCameraList();
+    if (target === "kiosk") startKioskStream();
+    if (target === "enroll") startEnrollCamera();
+  } catch (err) {
+    handleCameraError(err, target);
+  }
 }
 
-// --- KIOSK LIVE SCANNER ---
+function handleCameraError(err, target) {
+  let msg = "Unable to access camera.";
+  if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+    msg = "Permission denied. Allow camera in browser site settings.";
+    setPermissionUI("denied", msg);
+  } else if (
+    err.name === "NotFoundError" ||
+    err.name === "DevicesNotFoundError"
+  ) {
+    msg = "No webcam detected.";
+    setPermissionUI("denied", msg);
+  } else if (
+    err.name === "NotReadableError" ||
+    err.name === "TrackStartError"
+  ) {
+    msg = "Camera in use by another app.";
+  }
+
+  if (target === "kiosk") {
+    updateLcdBanner("ERROR", msg);
+  } else {
+    const fb = document.getElementById("enrollFeedback");
+    fb.textContent = msg;
+    fb.className = "text-xs text-center font-medium text-rose-400";
+  }
+}
+
+function toggleScanner() {
+  const isRunning = Boolean(
+    kioskStream ||
+    !document.getElementById("kioskEspImg").classList.contains("hidden"),
+  );
+  if (isRunning) {
+    stopKioskStream();
+  } else {
+    startKioskStream();
+  }
+}
+
 async function startKioskStream() {
   const video = document.getElementById("kioskVideo");
   const espImg = document.getElementById("kioskEspImg");
   const placeholder = document.getElementById("cameraPlaceholder");
-  const guide = document.getElementById("faceGuide");
-
-  if (selectedCameraId === "phone_snap") {
-    document.getElementById("phoneSnapVerifyInput").click();
-    return false;
-  }
+  const faceGuide = document.getElementById("faceGuide");
+  const btn = document.getElementById("toggleScanBtn");
 
   if (selectedCameraId === "esp32") {
-    if (!esp32Info.online || !esp32Info.stream_url) {
-      showCameraError(
-        "kiosk",
-        "ESP32-CAM offline. Tap Wi-Fi icon to link or configure.",
-      );
-      return false;
+    if (!esp32Status.online || !esp32Status.stream_url) {
+      updateLcdBanner("ERROR", "ESP32-CAM is offline.");
+      return;
     }
     video.classList.add("hidden");
-    espImg.src = `${esp32Info.stream_url}?t=${Date.now()}`;
+    espImg.src = `${esp32Status.stream_url}?t=${Date.now()}`;
     espImg.classList.remove("hidden");
     placeholder.classList.add("hidden");
-    guide.classList.remove("hidden");
+    faceGuide.classList.remove("hidden");
 
-    clearInterval(espStreamWatchdog);
-    espStreamWatchdog = setInterval(() => {
-      if (
-        isScanning &&
-        selectedCameraId === "esp32" &&
-        esp32Info.online &&
-        esp32Info.stream_url
-      ) {
-        if (espImg.naturalWidth === 0) {
-          espImg.src = `${esp32Info.stream_url}?t=${Date.now()}`;
-        }
+    btn.textContent = "Stop Scanner";
+    btn.className =
+      "bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold px-4 py-1.5 rounded-lg shadow-sm transition";
+    updateLcdBanner("NO_FACE", "ESP32-CAM Active — Ready to Scan");
+    scanInterval = setInterval(captureAndVerifyFrame, 650);
+    return;
+  }
+
+  const videoConstraints = selectedCameraId
+    ? {
+        deviceId: { exact: selectedCameraId },
+        width: { ideal: 640 },
+        height: { ideal: 480 },
       }
-    }, 3000);
-    return true;
-  }
-
-  if (!isLocalhostOrSecure()) {
-    showCameraError("kiosk", "Select Phone Camera or run server with --https.");
-    return false;
-  }
+    : { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } };
 
   try {
-    const constraints = selectedCameraId
-      ? {
-          video: {
-            deviceId: { exact: selectedCameraId },
-            width: 640,
-            height: 480,
-          },
-        }
-      : { video: { width: 640, height: 480 } };
-
-    kioskStream = await navigator.mediaDevices.getUserMedia(constraints);
-    camPermissionState = "granted";
-    await refreshVideoDevices();
-    updatePermissionBadge();
-
+    kioskStream = await navigator.mediaDevices.getUserMedia({
+      video: videoConstraints,
+      audio: false,
+    });
     espImg.classList.add("hidden");
     espImg.src = "";
     video.srcObject = kioskStream;
+    await video.play();
+
     video.classList.remove("hidden");
     placeholder.classList.add("hidden");
-    guide.classList.remove("hidden");
-    return true;
+    faceGuide.classList.remove("hidden");
+    setPermissionUI("granted", "Camera Ready");
+    await populateCameraList();
+
+    btn.textContent = "Stop Scanner";
+    btn.className =
+      "bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold px-4 py-1.5 rounded-lg shadow-sm transition";
+    updateLcdBanner("NO_FACE", "Ready to Scan");
+    scanInterval = setInterval(captureAndVerifyFrame, 550);
   } catch (err) {
-    showCameraError("kiosk", "Unable to start device webcam.");
-    return false;
+    handleCameraError(err, "kiosk");
   }
 }
 
 function stopKioskStream() {
-  clearInterval(scanInterval);
-  clearInterval(espStreamWatchdog);
-  scanInterval = null;
-  espStreamWatchdog = null;
-  isScanning = false;
-
+  if (scanInterval) {
+    clearInterval(scanInterval);
+    scanInterval = null;
+  }
   if (kioskStream) {
-    kioskStream.getTracks().forEach((track) => track.stop());
+    kioskStream.getTracks().forEach((t) => t.stop());
     kioskStream = null;
   }
-
-  const video = document.getElementById("kioskVideo");
   const espImg = document.getElementById("kioskEspImg");
-  video.srcObject = null;
-  video.classList.add("hidden");
   espImg.src = "";
   espImg.classList.add("hidden");
 
+  document.getElementById("kioskVideo").classList.add("hidden");
   document.getElementById("faceGuide").classList.add("hidden");
   document.getElementById("cameraPlaceholder").classList.remove("hidden");
-  document.getElementById("kioskGrantPermBtn").classList.add("hidden");
-  updatePhoneSnapState();
 
   const btn = document.getElementById("toggleScanBtn");
-  btn.textContent = "Start";
+  btn.textContent = "Start Scanner";
   btn.className =
-    "col-span-3 sm:w-auto bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 sm:px-4 py-2 sm:py-1.5 rounded-lg shadow-sm transition text-center whitespace-nowrap";
-  setLcdBanner("STANDBY", "Standby — Press Start");
-}
-
-async function toggleScanner() {
-  if (isScanning) {
-    stopKioskStream();
-    return;
-  }
-
-  const started = await startKioskStream();
-  if (!started) return;
-
-  isScanning = true;
-  const btn = document.getElementById("toggleScanBtn");
-  btn.textContent = "Stop";
-  btn.className =
-    "col-span-3 sm:w-auto bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold px-3 sm:px-4 py-2 sm:py-1.5 rounded-lg shadow-sm transition text-center whitespace-nowrap";
-  setLcdBanner("NO_FACE", "Ready to Scan");
-
-  scanInterval = setInterval(captureAndVerifyFrame, 650);
-}
-
-async function verifyPhoneSnapPhoto(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-
-  setLcdBanner("NO_FACE", "Analyzing phone photo...");
-  const reader = new FileReader();
-  reader.onload = async () => {
-    try {
-      const res = await fetch("/api/verify_frame", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image: reader.result,
-          source: "webcam",
-        }),
-      });
-      const data = await res.json();
-      if (data.status && data.message) {
-        setLcdBanner(data.status, data.message);
-      }
-      if (data.status === "LOGGED") {
-        loadDashboardData();
-      }
-    } catch (err) {
-      setLcdBanner("UNKNOWN", "Verification failed.");
-    } finally {
-      event.target.value = "";
-    }
-  };
-  reader.readAsDataURL(file);
+    "bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-1.5 rounded-lg shadow-sm transition";
+  updateLcdBanner("STANDBY", "Standby — Press Start Scanner");
 }
 
 async function captureCurrentFrameBase64(target) {
-  const isKiosk = target === "kiosk";
-  const canvas = document.getElementById(
-    isKiosk ? "kioskCanvas" : "enrollCanvas",
-  );
-  const ctx = canvas.getContext("2d");
-
-  if (selectedCameraId === "esp32") {
-    try {
-      const resp = await fetch(`/api/esp32/proxy_capture?t=${Date.now()}`);
-      if (!resp.ok) return null;
-      const blob = await resp.blob();
-      return await new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result);
-        reader.readAsDataURL(blob);
-      });
-    } catch (_) {
-      return null;
-    }
+  const isEsp = selectedCameraId === "esp32";
+  if (isEsp) {
+    const res = await fetch(`/api/esp32/proxy_capture?t=${Date.now()}`);
+    if (!res.ok) return "";
+    const blob = await res.blob();
+    return await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.readAsDataURL(blob);
+    });
   }
 
-  const video = document.getElementById(isKiosk ? "kioskVideo" : "enrollVideo");
-  if (!video || !video.videoWidth) return null;
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL("image/jpeg", 0.9);
+  const video = document.getElementById(
+    target === "kiosk" ? "kioskVideo" : "enrollVideo",
+  );
+  const canvas = document.getElementById(
+    target === "kiosk" ? "kioskCanvas" : "enrollCanvas",
+  );
+  if (!video || video.readyState < 2) return "";
+
+  canvas.width = video.videoWidth || 640;
+  canvas.height = video.videoHeight || 480;
+  canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.85);
 }
 
 async function captureAndVerifyFrame() {
-  if (!isScanning || isVerifying) return;
-  isVerifying = true;
+  if (isVerifyingFrame) return;
+  isVerifyingFrame = true;
 
   try {
-    const dataUrl = await captureCurrentFrameBase64("kiosk");
-    if (!dataUrl) return;
-
-    const cameraSource = selectedCameraId === "esp32" ? "esp32" : "webcam";
+    const isEsp = selectedCameraId === "esp32";
+    const imageBase64 = await captureCurrentFrameBase64("kiosk");
+    if (!imageBase64) return;
 
     const res = await fetch("/api/verify_frame", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        image: dataUrl,
-        source: cameraSource,
+        image: imageBase64,
+        source: isEsp ? "esp32" : "webcam",
       }),
     });
     const data = await res.json();
 
-    if (data.status && data.message) {
-      setLcdBanner(data.status, data.message);
-    }
+    updateLcdBanner(data.status, data.message);
 
     if (data.status === "LOGGED") {
       loadDashboardData();
     }
-  } catch (err) {
-    console.error("Verification error:", err);
+  } catch (_) {
+    // Ignore transient network hiccups during continuous loop
   } finally {
-    isVerifying = false;
+    isVerifyingFrame = false;
   }
 }
 
-// --- ENROLLMENT CAMERA & PHOTO UPLOAD ---
 async function startEnrollCamera() {
-  stopEnrollStream();
   uploadedEnrollBase64 = null;
   const video = document.getElementById("enrollVideo");
   const espImg = document.getElementById("enrollEspImg");
   const hint = document.getElementById("enrollCamHint");
 
   if (selectedCameraId === "esp32") {
-    if (!esp32Info.online || !esp32Info.stream_url) {
-      showCameraError(
-        "enroll",
-        "ESP32-CAM offline. Tap Phone Camera or upload photo.",
-      );
+    if (!esp32Status.online || !esp32Status.stream_url) {
+      const fb = document.getElementById("enrollFeedback");
+      fb.textContent = "ESP32-CAM is offline.";
+      fb.className = "text-xs text-center font-medium text-rose-400";
       return;
     }
     video.classList.add("hidden");
-    espImg.src = `${esp32Info.stream_url}?t=${Date.now()}`;
+    espImg.src = `${esp32Status.stream_url}?t=${Date.now()}`;
     espImg.classList.remove("hidden");
     hint.classList.add("hidden");
     return;
   }
 
-  if (!isLocalhostOrSecure()) {
-    document.getElementById("enrollCameraCaptureInput").click();
-    return;
-  }
+  const videoConstraints = selectedCameraId
+    ? {
+        deviceId: { exact: selectedCameraId },
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+      }
+    : { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } };
 
   try {
-    const constraints =
-      selectedCameraId && selectedCameraId !== "phone_snap"
-        ? {
-            video: {
-              deviceId: { exact: selectedCameraId },
-              width: 640,
-              height: 480,
-            },
-          }
-        : { video: true };
-    enrollStream = await navigator.mediaDevices.getUserMedia(constraints);
-    camPermissionState = "granted";
-    await refreshVideoDevices();
-    updatePermissionBadge();
-
+    enrollStream = await navigator.mediaDevices.getUserMedia({
+      video: videoConstraints,
+      audio: false,
+    });
     espImg.classList.add("hidden");
     espImg.src = "";
     video.srcObject = enrollStream;
+    await video.play();
     video.classList.remove("hidden");
     hint.classList.add("hidden");
+    setPermissionUI("granted", "Camera Ready");
+    await populateCameraList();
   } catch (err) {
-    showCameraError(
-      "enroll",
-      "Unable to open webcam. Use Phone Camera button.",
-    );
+    handleCameraError(err, "enroll");
   }
 }
 
 function stopEnrollStream() {
   if (enrollStream) {
-    enrollStream.getTracks().forEach((track) => track.stop());
+    enrollStream.getTracks().forEach((t) => t.stop());
     enrollStream = null;
   }
-  const video = document.getElementById("enrollVideo");
   const espImg = document.getElementById("enrollEspImg");
-  const photoPreview = document.getElementById("enrollPhotoPreview");
-  if (video) {
-    video.srcObject = null;
-    video.classList.add("hidden");
-  }
-  if (espImg) {
-    espImg.src = "";
-    espImg.classList.add("hidden");
-  }
-  if (photoPreview) {
-    photoPreview.src = "";
-    photoPreview.classList.add("hidden");
-  }
-  const hint = document.getElementById("enrollCamHint");
-  if (hint) {
-    hint.classList.remove("hidden");
-    document.getElementById("enrollCamStatusText").textContent =
-      "Camera or Photo Preview";
-    document.getElementById("enrollGrantPermBtn").classList.add("hidden");
-  }
+  espImg.src = "";
+  espImg.classList.add("hidden");
+
+  document.getElementById("enrollVideo").classList.add("hidden");
+  document.getElementById("enrollCamHint").classList.remove("hidden");
 }
 
 function uploadStudentImage(event) {
   const file = event.target.files[0];
   if (!file) return;
-  stopEnrollStream();
   const reader = new FileReader();
   reader.onload = () => {
     uploadedEnrollBase64 = reader.result;
-    const preview = document.getElementById("enrollPhotoPreview");
-    const hint = document.getElementById("enrollCamHint");
-    if (preview && hint) {
-      preview.src = uploadedEnrollBase64;
-      preview.classList.remove("hidden");
-      hint.classList.add("hidden");
-    }
-    const feedback = document.getElementById("enrollFeedback");
-    feedback.textContent = `Loaded: ${file.name}`;
-    feedback.className = "text-xs text-center font-medium text-sky-400";
+    const fb = document.getElementById("enrollFeedback");
+    fb.textContent = `Selected: ${file.name}`;
+    fb.className = "text-xs text-center font-medium text-sky-400";
   };
   reader.readAsDataURL(file);
 }
