@@ -10,69 +10,104 @@
       href="{{ url_for('static', filename='css/style.css') }}"
     />
   </head>
-  <body class="bg-slate-950 text-slate-100 min-h-screen font-sans">
-    <!-- Top Bar -->
+  <body
+    class="bg-[#080c14] text-slate-100 min-h-screen font-sans antialiased selection:bg-sky-500/30"
+  >
+    <!-- Top Header & Centered Tab Dock -->
     <header
-      class="bg-slate-900 border-b border-slate-800 px-6 py-3.5 flex flex-wrap items-center justify-between gap-3"
+      class="sticky top-0 z-30 bg-[#0c1220]/95 backdrop-blur-md border-b border-slate-800/90"
     >
-      <div class="flex items-center gap-2.5">
-        <h1 class="text-lg font-bold text-slate-100 tracking-tight">
-          ESP32-CAM Facial Attendance
-        </h1>
-        <span
-          class="px-2 py-0.5 rounded text-[11px] font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30"
-          >CPE-3B</span
-        >
-      </div>
-      <div class="flex items-center gap-2.5">
-        <span
-          id="activeClassBadge"
-          class="px-3 py-1 rounded-full text-xs font-semibold bg-sky-500/15 text-sky-300 border border-sky-500/30"
-        >
-          Loading...
-        </span>
-        <span
-          id="liveClock"
-          class="text-xs font-mono text-slate-300 bg-slate-800 border border-slate-700/80 px-3 py-1 rounded-lg"
-        ></span>
+      <div
+        class="max-w-7xl mx-auto px-6 py-3.5 grid grid-cols-1 md:grid-cols-3 items-center gap-3"
+      >
+        <!-- Brand Identity -->
+        <div class="flex items-center justify-center md:justify-start gap-3">
+          <div
+            class="w-8 h-8 rounded-lg bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center shadow-md shadow-sky-950/50"
+          >
+            <svg
+              class="w-4 h-4 text-white"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              stroke-width="2.2"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M7 3H5a2 2 0 00-2 2v2m14-4h2a2 2 0 012 2v2M7 21H5a2 2 0 01-2-2v-2m14 4h2a2 2 0 002-2v-2M9 10h.01M15 10h.01M9.5 15a3.5 3.5 0 005 0"
+              />
+            </svg>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <h1 class="text-base font-bold tracking-tight text-white">
+                FaceAttend
+              </h1>
+              <span
+                class="px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wider bg-indigo-500/15 text-indigo-300 border border-indigo-500/30"
+                >CPE-3B</span
+              >
+            </div>
+            <p class="text-[11px] text-slate-400 hidden sm:block">
+              Biometric Classroom Kiosk
+            </p>
+          </div>
+        </div>
+
+        <!-- Centered Navigation Pill Bar -->
+        <nav class="flex items-center justify-center">
+          <div
+            class="inline-flex items-center gap-1 p-1 rounded-xl bg-slate-900/90 border border-slate-800 shadow-inner"
+          >
+            <button
+              onclick="switchTab('kiosk')"
+              id="tab-kiosk"
+              class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition bg-sky-500/15 text-sky-300 border border-sky-500/30"
+            >
+              Live Scanner
+            </button>
+            <button
+              onclick="switchTab('logs')"
+              id="tab-logs"
+              class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent"
+            >
+              Attendance Logs
+            </button>
+            <button
+              onclick="switchTab('enroll')"
+              id="tab-enroll"
+              class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent"
+            >
+              Enrolled Faces
+            </button>
+            <button
+              onclick="switchTab('schedules')"
+              id="tab-schedules"
+              class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent"
+            >
+              Schedules
+            </button>
+          </div>
+        </nav>
+
+        <!-- Live Class & Clock Telemetry -->
+        <div class="flex items-center justify-center md:justify-end gap-2.5">
+          <span
+            id="activeClassBadge"
+            class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 text-sky-300 border border-slate-800 truncate max-w-[210px]"
+          >
+            Loading...
+          </span>
+          <span
+            id="liveClock"
+            class="text-xs font-mono text-slate-300 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg shrink-0"
+          ></span>
+        </div>
       </div>
     </header>
 
-    <!-- Navigation -->
-    <nav
-      class="bg-slate-900/60 border-b border-slate-800 px-6 flex gap-6 text-sm font-medium"
-    >
-      <button
-        onclick="switchTab('kiosk')"
-        id="tab-kiosk"
-        class="py-3 border-b-2 border-sky-400 text-sky-400"
-      >
-        Live Scanner
-      </button>
-      <button
-        onclick="switchTab('logs')"
-        id="tab-logs"
-        class="py-3 border-b-2 border-transparent text-slate-400 hover:text-slate-200"
-      >
-        Attendance Logs
-      </button>
-      <button
-        onclick="switchTab('enroll')"
-        id="tab-enroll"
-        class="py-3 border-b-2 border-transparent text-slate-400 hover:text-slate-200"
-      >
-        Enrolled Faces
-      </button>
-      <button
-        onclick="switchTab('schedules')"
-        id="tab-schedules"
-        class="py-3 border-b-2 border-transparent text-slate-400 hover:text-slate-200"
-      >
-        Schedules
-      </button>
-    </nav>
-
-    <main class="max-w-6xl mx-auto p-6 space-y-5">
+    <main class="max-w-7xl mx-auto px-6 py-7 space-y-6">
       <!-- Insecure Host Warning -->
       <div
         id="insecureContextBanner"
@@ -94,33 +129,18 @@
       </div>
 
       <!-- TAB 1: LIVE SCANNER -->
-      <section id="view-kiosk" class="space-y-4">
-        <div
-          id="pendingAbsenceBanner"
-          class="hidden bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs"
-        >
-          <span
-            id="pendingAbsenceText"
-            class="text-amber-300 font-medium"
-          ></span>
-          <button
-            id="pendingAbsenceBtn"
-            class="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-3 py-1.5 rounded-lg transition"
-          >
-            Mark Remaining Absent
-          </button>
-        </div>
-
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <section id="view-kiosk" class="space-y-6">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          <!-- Camera Viewport (7 cols) -->
           <div
-            class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-5"
+            class="lg:col-span-7 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-6 shadow-xl shadow-black/25"
           >
-            <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+            <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
               <div class="flex items-center gap-2.5">
-                <h2 class="text-base font-semibold">Camera Feed</h2>
+                <h2 class="text-base font-bold text-white">Live Camera Feed</h2>
                 <span
                   id="camPermissionBadge"
-                  class="px-2 py-0.5 rounded text-[11px] font-medium bg-slate-800 text-slate-400 border border-slate-700"
+                  class="px-2.5 py-0.5 rounded-md text-[11px] font-medium bg-slate-900 text-slate-400 border border-slate-800"
                 >
                   Checking...
                 </span>
@@ -130,18 +150,18 @@
                 <select
                   id="cameraDeviceSelect"
                   onchange="onCameraDeviceChange()"
-                  class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1.5 text-slate-200 max-w-[170px] truncate"
+                  class="bg-slate-900 border border-slate-700/80 text-xs rounded-lg px-2.5 py-1.5 text-slate-200 max-w-[165px] truncate"
                 ></select>
                 <select
                   id="overrideSubject"
-                  class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1.5 text-slate-200 max-w-[170px] truncate"
+                  class="bg-slate-900 border border-slate-700/80 text-xs rounded-lg px-2.5 py-1.5 text-slate-200 max-w-[165px] truncate"
                 >
                   <option value="">Auto Schedule</option>
                 </select>
                 <button
                   id="toggleScanBtn"
                   onclick="toggleScanner()"
-                  class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-1.5 rounded-lg transition"
+                  class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-1.5 rounded-lg shadow-sm transition"
                 >
                   Start Scanner
                 </button>
@@ -149,7 +169,7 @@
             </div>
 
             <div
-              class="relative bg-black rounded-lg overflow-hidden aspect-video flex items-center justify-center border border-slate-800"
+              class="relative bg-black rounded-xl overflow-hidden aspect-video flex items-center justify-center border border-slate-800/90"
             >
               <video
                 id="kioskVideo"
@@ -170,7 +190,7 @@
                 class="hidden pointer-events-none absolute inset-0 flex items-center justify-center"
               >
                 <div
-                  class="w-48 h-60 border-2 border-dashed border-sky-400/60 rounded-2xl"
+                  class="w-52 h-64 border-2 border-dashed border-sky-400/50 rounded-3xl"
                 ></div>
               </div>
 
@@ -192,10 +212,10 @@
               </div>
             </div>
 
-            <!-- Color-Coded LCD Status Display -->
+            <!-- Status Telemetry Bar -->
             <div
               id="lcdBanner"
-              class="lcd-banner mt-4 px-4 py-3.5 rounded-xl bg-slate-800/90 border border-slate-700 font-mono text-sm text-slate-300 flex items-center justify-between gap-3"
+              class="lcd-banner mt-4 px-4 py-3.5 rounded-xl bg-slate-900/90 border border-slate-800 font-mono text-sm text-slate-300 flex items-center justify-between gap-3"
             >
               <div class="flex items-center gap-2.5 min-w-0">
                 <span id="lcdDot" class="lcd-dot bg-slate-500"></span>
@@ -205,24 +225,24 @@
               </div>
               <span
                 id="lcdStatusTag"
-                class="text-[11px] font-bold tracking-wider px-2 py-0.5 rounded bg-black/30 shrink-0"
+                class="text-[11px] font-bold tracking-wider px-2.5 py-0.5 rounded-md bg-black/40 shrink-0"
               >
                 STANDBY
               </span>
             </div>
           </div>
 
-          <!-- Right Column: Recent Scans + Photo Spoof Alerts -->
-          <div class="space-y-4">
+          <!-- Right Column: Recent Scans + Photo Spoof Alerts (5 cols) -->
+          <div class="lg:col-span-5 space-y-5">
             <div
-              class="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col"
+              class="bg-[#0d1424] border border-slate-800/90 rounded-2xl p-6 shadow-xl shadow-black/25 flex flex-col"
             >
-              <div class="flex items-center justify-between gap-2 mb-3">
-                <div class="flex items-center gap-2">
-                  <h2 class="text-base font-semibold">Recent Scans</h2>
+              <div class="flex items-center justify-between gap-2 mb-4">
+                <div class="flex items-center gap-2.5">
+                  <h2 class="text-base font-bold text-white">Recent Scans</h2>
                   <span
                     id="recentScansCountBadge"
-                    class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-sky-500/15 text-sky-300 border border-sky-500/30"
+                    class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-sky-500/15 text-sky-300 border border-sky-500/30"
                   >
                     0
                   </span>
@@ -230,7 +250,7 @@
                 <select
                   id="recentScansScope"
                   onchange="onRecentScansScopeChange()"
-                  class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1 text-slate-200"
+                  class="bg-slate-900 border border-slate-700/80 text-xs rounded-lg px-2.5 py-1.5 text-slate-200"
                 >
                   <option value="today">Today</option>
                   <option value="yesterday">Yesterday</option>
@@ -242,18 +262,18 @@
                 id="recentScansDate"
                 type="date"
                 onchange="renderRecentScans()"
-                class="hidden mb-2.5 w-full bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1.5 text-slate-200"
+                class="hidden mb-3 w-full bg-slate-900 border border-slate-700 text-xs rounded-lg px-3 py-1.5 text-slate-200"
               />
               <div
                 id="recentFeed"
-                class="space-y-2 overflow-y-auto max-h-[290px] pr-1 text-sm"
+                class="space-y-2.5 overflow-y-auto max-h-[340px] pr-1 text-sm"
               ></div>
             </div>
 
             <!-- Flagged Photo/Screen Spoof Attempts -->
             <div
               id="spoofAlertPanel"
-              class="hidden bg-rose-950/20 border border-rose-500/40 rounded-xl p-4 space-y-2.5"
+              class="hidden bg-rose-950/20 border border-rose-500/40 rounded-2xl p-5 space-y-3"
             >
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-2">
@@ -274,7 +294,7 @@
               </div>
               <div
                 id="spoofAlertsList"
-                class="space-y-2 max-h-[160px] overflow-y-auto pr-1 text-xs"
+                class="space-y-2 max-h-[170px] overflow-y-auto pr-1 text-xs"
               ></div>
             </div>
           </div>
@@ -282,61 +302,78 @@
       </section>
 
       <!-- TAB 2: ATTENDANCE LOGS & CALENDAR -->
-      <section id="view-logs" class="hidden space-y-4">
-        <div class="grid grid-cols-3 gap-4">
+      <section id="view-logs" class="hidden space-y-6">
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-5">
           <div
-            class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between"
+            class="bg-[#0d1424] border border-slate-800/90 border-t-2 border-t-emerald-500/70 rounded-2xl p-5 flex items-center justify-between"
           >
-            <span class="text-xs uppercase text-slate-400 font-semibold"
-              >Present</span
-            >
-            <span id="countPresent" class="text-2xl font-bold text-emerald-400"
+            <div>
+              <p
+                class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold"
+              >
+                Present
+              </p>
+              <p class="text-xs text-slate-500 mt-0.5">Verified on time</p>
+            </div>
+            <span id="countPresent" class="text-3xl font-bold text-emerald-400"
               >0</span
             >
           </div>
           <div
-            class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between"
+            class="bg-[#0d1424] border border-slate-800/90 border-t-2 border-t-amber-500/70 rounded-2xl p-5 flex items-center justify-between"
           >
-            <span class="text-xs uppercase text-slate-400 font-semibold"
-              >Late</span
-            >
-            <span id="countLate" class="text-2xl font-bold text-amber-400"
+            <div>
+              <p
+                class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold"
+              >
+                Late
+              </p>
+              <p class="text-xs text-slate-500 mt-0.5">&gt; 15m past start</p>
+            </div>
+            <span id="countLate" class="text-3xl font-bold text-amber-400"
               >0</span
             >
           </div>
           <div
-            class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between"
+            class="bg-[#0d1424] border border-slate-800/90 border-t-2 border-t-rose-500/70 rounded-2xl p-5 flex items-center justify-between"
           >
-            <span class="text-xs uppercase text-slate-400 font-semibold"
-              >Absent</span
-            >
-            <span id="countAbsent" class="text-2xl font-bold text-rose-400"
+            <div>
+              <p
+                class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold"
+              >
+                Absent
+              </p>
+              <p class="text-xs text-slate-500 mt-0.5">
+                Auto-logged at class end
+              </p>
+            </div>
+            <span id="countAbsent" class="text-3xl font-bold text-rose-400"
               >0</span
             >
           </div>
         </div>
 
         <div
-          class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4"
+          class="bg-[#0d1424] border border-slate-800/90 rounded-2xl p-6 space-y-5 shadow-xl shadow-black/25"
         >
           <div
-            class="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800"
+            class="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800"
           >
-            <div class="flex flex-wrap items-center gap-2">
+            <div class="flex flex-wrap items-center gap-2.5">
               <div
-                class="inline-flex rounded-lg bg-slate-800 p-0.5 border border-slate-700"
+                class="inline-flex rounded-xl bg-slate-900 p-1 border border-slate-800"
               >
                 <button
                   onclick="setLogViewMode('table')"
                   id="mode-table"
-                  class="px-3 py-1 text-xs font-semibold rounded-md bg-sky-600 text-white"
+                  class="px-3 py-1 text-xs font-semibold rounded-lg bg-sky-600 text-white"
                 >
                   Table
                 </button>
                 <button
                   onclick="setLogViewMode('calendar')"
                   id="mode-calendar"
-                  class="px-3 py-1 text-xs font-semibold rounded-md text-slate-400 hover:text-slate-200"
+                  class="px-3 py-1 text-xs font-semibold rounded-lg text-slate-400 hover:text-slate-200"
                 >
                   Calendar
                 </button>
@@ -345,7 +382,7 @@
               <select
                 id="logDateScope"
                 onchange="onLogDateScopeChange()"
-                class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1.5 text-slate-200"
+                class="bg-slate-900 border border-slate-700/80 text-xs rounded-lg px-3 py-1.5 text-slate-200"
               >
                 <option value="today">Today</option>
                 <option value="all">All Dates</option>
@@ -356,13 +393,13 @@
                 id="filterDate"
                 type="date"
                 onchange="refreshLogsDisplay()"
-                class="hidden bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1 text-slate-200"
+                class="hidden bg-slate-900 border border-slate-700 text-xs rounded-lg px-2.5 py-1.5 text-slate-200"
               />
 
               <select
                 id="filterStudent"
                 onchange="refreshLogsDisplay()"
-                class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1.5 text-slate-200 max-w-[160px] truncate"
+                class="bg-slate-900 border border-slate-700/80 text-xs rounded-lg px-3 py-1.5 text-slate-200 max-w-[170px] truncate"
               >
                 <option value="">All Students</option>
               </select>
@@ -370,13 +407,13 @@
               <select
                 id="filterSubject"
                 onchange="refreshLogsDisplay()"
-                class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1.5 text-slate-200 max-w-[170px] truncate"
+                class="bg-slate-900 border border-slate-700/80 text-xs rounded-lg px-3 py-1.5 text-slate-200 max-w-[180px] truncate"
               >
                 <option value="">All Subjects</option>
               </select>
             </div>
 
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2.5">
               <a
                 id="exportCsvBtn"
                 href="/api/export_csv"
@@ -387,10 +424,10 @@
 
               <button
                 type="button"
-                onclick="openManageModal()"
-                class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold px-3 py-1.5 rounded-lg transition whitespace-nowrap"
+                onclick="clearTestLogs()"
+                class="bg-slate-900 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-700/70 text-slate-300 hover:text-rose-300 text-xs font-semibold px-3 py-1.5 rounded-lg transition whitespace-nowrap"
               >
-                Manage
+                Reset Logs
               </button>
             </div>
           </div>
@@ -402,19 +439,19 @@
               <div class="flex items-center gap-2">
                 <button
                   onclick="changeCalendarMonth(-1)"
-                  class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold"
+                  class="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-semibold"
                 >
                   &lt; Prev
                 </button>
                 <button
                   onclick="jumpCalendarToday()"
-                  class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold"
+                  class="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-semibold"
                 >
                   Today
                 </button>
                 <button
                   onclick="changeCalendarMonth(1)"
-                  class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold"
+                  class="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-semibold"
                 >
                   Next &gt;
                 </button>
@@ -440,10 +477,10 @@
               </div>
             </div>
 
-            <div class="overflow-x-auto rounded-lg border border-slate-800">
+            <div class="overflow-x-auto rounded-xl border border-slate-800">
               <div class="min-w-[805px]">
                 <div
-                  class="att-calendar-grid bg-slate-800/80 border-b border-slate-800 text-[11px] font-bold uppercase text-slate-400"
+                  class="att-calendar-grid bg-slate-900 border-b border-slate-800 text-[11px] font-bold uppercase text-slate-400"
                 >
                   <div class="py-2.5 text-center border-r border-slate-800">
                     Sun
@@ -471,7 +508,7 @@
 
             <div
               id="calendarDayDetail"
-              class="p-3.5 rounded-lg bg-slate-800/60 border border-slate-800 text-xs text-slate-400"
+              class="p-4 rounded-xl bg-slate-900/80 border border-slate-800 text-xs text-slate-400"
             >
               Click a date above to view attendance details.
             </div>
@@ -482,17 +519,14 @@
       <!-- TAB 3: ENROLLED FACES -->
       <section
         id="view-enroll"
-        class="hidden grid grid-cols-1 lg:grid-cols-3 gap-6"
+        class="hidden grid grid-cols-1 lg:grid-cols-12 gap-6 items-start"
       >
         <div
           id="enrollFormCard"
-          class="bg-slate-900 border border-slate-800 rounded-xl p-5 self-start transition-colors"
+          class="lg:col-span-4 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-6 transition-colors shadow-xl shadow-black/25"
         >
           <div class="flex items-center justify-between mb-4">
-            <h2
-              id="enrollFormTitle"
-              class="text-base font-semibold text-slate-100"
-            >
+            <h2 id="enrollFormTitle" class="text-base font-bold text-white">
               Enroll Student
             </h2>
             <button
@@ -509,32 +543,32 @@
               id="enrollId"
               type="text"
               placeholder="Student ID (e.g., 2023-00142)"
-              class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
+              class="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-2"
             />
             <input
               id="enrollName"
               type="text"
               placeholder="Full Name"
-              class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
+              class="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-2"
             />
             <input
               id="enrollSection"
               type="text"
               value="CPE-3B"
               placeholder="Section"
-              class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
+              class="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-2"
             />
 
             <button
               type="button"
               onclick="startEnrollCamera()"
-              class="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs py-2 rounded-lg font-medium"
+              class="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs py-2 rounded-lg font-medium transition"
             >
               Open Camera
             </button>
 
             <div
-              class="relative bg-black rounded-lg overflow-hidden border border-slate-800 min-h-[160px] flex items-center justify-center"
+              class="relative bg-black rounded-xl overflow-hidden border border-slate-800 min-h-[170px] flex items-center justify-center"
             >
               <video
                 id="enrollVideo"
@@ -568,7 +602,7 @@
               id="enrollSubmitBtn"
               type="button"
               onclick="submitStudentForm()"
-              class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-lg transition"
+              class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-lg transition"
             >
               Capture & Save
             </button>
@@ -585,9 +619,16 @@
         </div>
 
         <div
-          class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-5"
+          class="lg:col-span-8 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-6 shadow-xl shadow-black/25"
         >
-          <h2 class="text-base font-semibold mb-4">Registered Students</h2>
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-base font-bold text-white">Registered Students</h2>
+            <span
+              id="enrolledCountBadge"
+              class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-900 text-slate-300 border border-slate-800"
+              >0 Students</span
+            >
+          </div>
           <div class="overflow-x-auto">
             <table class="w-full text-left text-sm">
               <thead>
@@ -613,17 +654,14 @@
       <!-- TAB 4: DAY-GROUPED SCHEDULES -->
       <section
         id="view-schedules"
-        class="hidden grid grid-cols-1 lg:grid-cols-3 gap-6"
+        class="hidden grid grid-cols-1 lg:grid-cols-12 gap-6 items-start"
       >
         <div
           id="schedFormCard"
-          class="bg-slate-900 border border-slate-800 rounded-xl p-5 self-start transition-colors"
+          class="lg:col-span-4 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-6 transition-colors shadow-xl shadow-black/25"
         >
           <div class="flex items-center justify-between mb-4">
-            <h2
-              id="schedFormTitle"
-              class="text-base font-semibold text-slate-100"
-            >
+            <h2 id="schedFormTitle" class="text-base font-bold text-white">
               Add Schedule
             </h2>
             <button
@@ -638,7 +676,7 @@
           <div class="space-y-3 text-sm">
             <select
               id="schedDay"
-              class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-100"
+              class="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-2 text-slate-100"
             >
               <option value="Monday">Monday</option>
               <option value="Tuesday">Tuesday</option>
@@ -651,15 +689,15 @@
               id="schedCode"
               type="text"
               placeholder="Subject Code (e.g., CPE 311)"
-              class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 uppercase"
+              class="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-2 uppercase"
             />
             <input
               id="schedSubject"
               type="text"
               placeholder="Subject Name (e.g., Logic Circuits)"
-              class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
+              class="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-2"
             />
-            <div class="grid grid-cols-2 gap-2">
+            <div class="grid grid-cols-2 gap-2.5">
               <div>
                 <label class="block text-[11px] text-slate-400 mb-1"
                   >Start</label
@@ -667,7 +705,7 @@
                 <input
                   id="schedStart"
                   type="time"
-                  class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
+                  class="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-2"
                 />
               </div>
               <div>
@@ -675,14 +713,14 @@
                 <input
                   id="schedEnd"
                   type="time"
-                  class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
+                  class="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-2"
                 />
               </div>
             </div>
             <button
               id="schedSubmitBtn"
               onclick="submitScheduleForm()"
-              class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-lg transition"
+              class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-lg transition"
             >
               Save Schedule
             </button>
@@ -693,17 +731,17 @@
           </div>
         </div>
 
-        <div class="lg:col-span-2 space-y-4">
+        <div class="lg:col-span-8 space-y-4">
           <div
-            class="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2"
+            class="bg-[#0d1424] border border-slate-800/90 rounded-2xl px-5 py-3.5 flex flex-wrap items-center justify-between gap-2"
           >
-            <span class="text-xs font-semibold text-slate-400 pl-1"
-              >Filter Day:</span
+            <span class="text-xs font-semibold text-slate-300"
+              >Filter by Day</span
             >
             <select
               id="scheduleDayFilter"
               onchange="setScheduleDayFilter(this.value)"
-              class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-3 py-1.5 text-slate-200"
+              class="bg-slate-900 border border-slate-700/80 text-xs rounded-lg px-3 py-1.5 text-slate-200"
             >
               <option value="ALL">All Days</option>
               <option value="Monday">Monday</option>
@@ -728,7 +766,7 @@
     >
       <div
         onclick="event.stopPropagation()"
-        class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md p-5 shadow-2xl space-y-3"
+        class="bg-[#0d1424] border border-slate-700 rounded-2xl w-full max-w-md p-5 shadow-2xl space-y-3"
       >
         <div class="flex items-center justify-between">
           <h3
@@ -759,66 +797,6 @@
           id="proofModalMeta"
           class="text-xs text-slate-400 font-mono text-center"
         ></p>
-      </div>
-    </div>
-
-    <!-- MANAGE ATTENDANCE MODAL -->
-    <div
-      id="manageModal"
-      onclick="closeManageModal()"
-      class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4"
-    >
-      <div
-        onclick="event.stopPropagation()"
-        class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-5"
-      >
-        <div
-          class="flex items-center justify-between border-b border-slate-800 pb-3.5"
-        >
-          <h3 class="text-base font-bold text-slate-100">Manage Attendance</h3>
-          <button
-            type="button"
-            onclick="closeManageModal()"
-            class="text-xs text-slate-300 hover:text-white px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700"
-          >
-            Close
-          </button>
-        </div>
-
-        <div class="space-y-2.5">
-          <label
-            class="block text-xs font-semibold uppercase tracking-wide text-slate-400"
-            >Mark Absences</label
-          >
-          <div class="flex items-center gap-2.5">
-            <select
-              id="absenceSubjectSelect"
-              class="flex-1 min-w-0 truncate bg-slate-800 border border-slate-700 text-xs rounded-lg px-3 py-2.5 text-slate-200"
-            ></select>
-            <button
-              type="button"
-              onclick="markRemainingAbsent()"
-              class="shrink-0 whitespace-nowrap bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold px-4 py-2.5 rounded-lg transition"
-            >
-              Mark Absent
-            </button>
-          </div>
-        </div>
-
-        <div
-          class="pt-4 border-t border-slate-800 flex items-center justify-between gap-4"
-        >
-          <span class="text-xs font-semibold text-slate-300"
-            >Reset All Logs</span
-          >
-          <button
-            type="button"
-            onclick="clearTestLogs()"
-            class="shrink-0 whitespace-nowrap bg-rose-950/90 hover:bg-rose-900 border border-rose-700/80 text-rose-300 text-xs font-semibold px-4 py-2 rounded-lg transition"
-          >
-            Clear All Logs
-          </button>
-        </div>
       </div>
     </div>
 

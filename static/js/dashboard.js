@@ -37,36 +37,37 @@ const ICONS = {
   photo: `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/></svg>`,
 };
 
+// Distinct per-day palette (Cobalt Blue Monday vs Emerald Green Wednesday)
 const DAY_ACCENTS = {
   Monday: {
-    header: "bg-sky-950/50 border-sky-800/60",
-    title: "text-sky-300",
-    badge: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+    header: "bg-blue-950/55 border-blue-800/60",
+    title: "text-blue-300",
+    badge: "bg-blue-500/15 text-blue-300 border-blue-500/30",
   },
   Tuesday: {
-    header: "bg-violet-950/50 border-violet-800/60",
+    header: "bg-violet-950/55 border-violet-800/60",
     title: "text-violet-300",
     badge: "bg-violet-500/15 text-violet-300 border-violet-500/30",
   },
   Wednesday: {
-    header: "bg-cyan-950/50 border-cyan-800/60",
-    title: "text-cyan-300",
-    badge: "bg-cyan-500/15 text-cyan-300 border-cyan-500/30",
+    header: "bg-emerald-950/55 border-emerald-800/60",
+    title: "text-emerald-300",
+    badge: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
   },
   Thursday: {
-    header: "bg-amber-950/45 border-amber-800/60",
+    header: "bg-amber-950/50 border-amber-800/60",
     title: "text-amber-300",
     badge: "bg-amber-500/15 text-amber-300 border-amber-500/30",
   },
   Friday: {
-    header: "bg-rose-950/45 border-rose-800/60",
+    header: "bg-rose-950/50 border-rose-800/60",
     title: "text-rose-300",
     badge: "bg-rose-500/15 text-rose-300 border-rose-500/30",
   },
   Saturday: {
-    header: "bg-indigo-950/50 border-indigo-800/60",
-    title: "text-indigo-300",
-    badge: "bg-indigo-500/15 text-indigo-300 border-indigo-500/30",
+    header: "bg-orange-950/50 border-orange-800/60",
+    title: "text-orange-300",
+    badge: "bg-orange-500/15 text-orange-300 border-orange-500/30",
   },
   Sunday: {
     header: "bg-slate-800/70 border-slate-700",
@@ -77,18 +78,9 @@ const DAY_ACCENTS = {
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    closeManageModal();
     closeProofModal();
   }
 });
-
-function openManageModal() {
-  document.getElementById("manageModal").classList.remove("hidden");
-}
-
-function closeManageModal() {
-  document.getElementById("manageModal").classList.add("hidden");
-}
 
 function openProofModal(relPath, title, meta) {
   if (!relPath) return;
@@ -149,10 +141,13 @@ function switchTab(tab) {
   ["kiosk", "logs", "enroll", "schedules"].forEach((t) => {
     document.getElementById(`view-${t}`).classList.toggle("hidden", t !== tab);
     const btn = document.getElementById(`tab-${t}`);
-    btn.classList.toggle("border-sky-400", t === tab);
-    btn.classList.toggle("text-sky-400", t === tab);
-    btn.classList.toggle("border-transparent", t !== tab);
-    btn.classList.toggle("text-slate-400", t !== tab);
+    if (t === tab) {
+      btn.className =
+        "px-3.5 py-1.5 rounded-lg text-xs font-semibold transition bg-sky-500/15 text-sky-300 border border-sky-500/30";
+    } else {
+      btn.className =
+        "px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent";
+    }
   });
   loadDashboardData();
 }
@@ -201,24 +196,24 @@ function renderRecentScans() {
             ? `<span class="text-slate-500">${l.date_str} • </span>`
             : "";
         const proofBtn = l.proof_image
-          ? `<button type="button" onclick="openProofModal('${l.proof_image}', '${l.full_name.replace(/'/g, "\\'")}', '${l.subject_code || l.subject} • ${l.date_str} ${l.time_str}')" title="View Capture Proof" class="p-1 rounded text-slate-400 hover:text-sky-300 hover:bg-slate-700/60 transition">${ICONS.photo}</button>`
+          ? `<button type="button" onclick="openProofModal('${l.proof_image}', '${l.full_name.replace(/'/g, "\\'")}', '${l.subject_code || l.subject} • ${l.date_str} ${l.time_str}')" title="View Capture Proof" class="p-1 rounded text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition">${ICONS.photo}</button>`
           : "";
 
         return `
-      <div class="p-3 rounded-lg bg-slate-800/70 border border-slate-700/60 flex justify-between items-center gap-2">
+      <div class="p-3 rounded-xl bg-slate-900/80 border border-slate-800 flex justify-between items-center gap-2">
         <div class="min-w-0">
           <p class="font-semibold text-slate-100 truncate">${l.full_name}</p>
           <p class="text-xs text-slate-400 truncate">${subjBadge} • ${datePrefix}${l.time_str}</p>
         </div>
         <div class="flex items-center gap-1.5 shrink-0">
           ${proofBtn}
-          <span class="px-2 py-0.5 rounded text-xs font-bold ${badgeClass(l.status)}">${l.status}</span>
+          <span class="px-2 py-0.5 rounded-md text-xs font-bold ${badgeClass(l.status)}">${l.status}</span>
         </div>
       </div>
     `;
       })
       .join("") ||
-    `<p class="text-slate-500 text-xs py-6 text-center">${targetDate ? `No scans recorded on ${formatHumanDate(targetDate)}.` : "No scans recorded yet."}</p>`;
+    `<p class="text-slate-500 text-xs py-8 text-center">${targetDate ? `No scans recorded on ${formatHumanDate(targetDate)}.` : "No scans recorded yet."}</p>`;
 }
 
 function renderSpoofAlerts() {
@@ -235,12 +230,12 @@ function renderSpoofAlerts() {
   list.innerHTML = cachedSpoofs
     .map(
       (sp) => `
-    <div class="p-2.5 rounded-lg bg-slate-900/90 border border-rose-500/30 flex items-center justify-between gap-2">
+    <div class="p-2.5 rounded-xl bg-slate-900/90 border border-rose-500/30 flex items-center justify-between gap-2">
       <div class="min-w-0">
         <p class="font-semibold text-rose-200 truncate">${sp.suspected_name}</p>
         <p class="text-[11px] text-slate-400 truncate">${sp.source} • ${sp.date_str} ${sp.time_str}</p>
       </div>
-      <button type="button" onclick="openProofModal('${sp.proof_image}', 'Spoof Attempt: ${sp.suspected_name.replace(/'/g, "\\'")}', '${sp.source} • Texture ${sp.texture_score} • ${sp.date_str} ${sp.time_str}')" class="shrink-0 px-2 py-1 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 font-semibold text-[11px] transition">
+      <button type="button" onclick="openProofModal('${sp.proof_image}', 'Spoof Attempt: ${sp.suspected_name.replace(/'/g, "\\'")}', '${sp.source} • Texture ${sp.texture_score} • ${sp.date_str} ${sp.time_str}')" class="shrink-0 px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 font-semibold text-[11px] transition">
         Inspect
       </button>
     </div>
@@ -268,25 +263,16 @@ async function loadDashboardData() {
   });
 
   document.getElementById("activeClassBadge").textContent = data.active_subject;
+  const enrolledCountEl = document.getElementById("enrolledCountBadge");
+  if (enrolledCountEl) {
+    enrolledCountEl.textContent = `${cachedStudents.length} Student${cachedStudents.length === 1 ? "" : "s"}`;
+  }
+
   if (typeof updateEsp32CameraStatus === "function") {
     updateEsp32CameraStatus(data.esp32);
   }
 
-  const banner = document.getElementById("pendingAbsenceBanner");
-  if (data.pending_absences && data.pending_absences.length > 0) {
-    const first = data.pending_absences[0];
-    const codeTag = first.subject_code || first.subject;
-    document.getElementById("pendingAbsenceText").textContent =
-      `${codeTag} ended — ${first.missing_count} unlogged student(s).`;
-    document.getElementById("pendingAbsenceBtn").onclick = () =>
-      quickMarkAbsent(first.subject);
-    banner.classList.remove("hidden");
-  } else {
-    banner.classList.add("hidden");
-  }
-
   const overrideSel = document.getElementById("overrideSubject");
-  const absenceSel = document.getElementById("absenceSubjectSelect");
   const filterSubSel = document.getElementById("filterSubject");
   const filterStuSel = document.getElementById("filterStudent");
 
@@ -295,7 +281,6 @@ async function loadDashboardData() {
   const prevFilterStu = filterStuSel.value;
 
   overrideSel.innerHTML = `<option value="">Auto Schedule</option>`;
-  absenceSel.innerHTML = "";
   filterSubSel.innerHTML = `<option value="">All Subjects</option>`;
   filterStuSel.innerHTML = `<option value="">All Students</option>`;
 
@@ -307,7 +292,6 @@ async function loadDashboardData() {
         ? `${s.subject_code} • ${s.subject}`
         : s.subject;
       overrideSel.innerHTML += `<option value="${s.subject}">${optLabel}</option>`;
-      absenceSel.innerHTML += `<option value="${s.subject}">${optLabel}</option>`;
       filterSubSel.innerHTML += `<option value="${s.subject}">${optLabel}</option>`;
     }
   });
@@ -361,7 +345,7 @@ function renderStudentsTable() {
     `;
       })
       .join("") ||
-    `<tr><td colspan="5" class="py-4 px-4 text-center text-xs text-slate-500">No enrolled students.</td></tr>`;
+    `<tr><td colspan="5" class="py-6 px-4 text-center text-xs text-slate-500">No enrolled students.</td></tr>`;
 }
 
 // --- DAY-GROUPED SCHEDULES ---
@@ -382,7 +366,7 @@ function renderDayGroupedSchedules() {
       : [selectedScheduleDayFilter];
 
   if (daysToRender.length === 0) {
-    container.innerHTML = `<div class="bg-slate-900 border border-slate-800 rounded-xl p-6 text-center text-xs text-slate-500">No schedules configured.</div>`;
+    container.innerHTML = `<div class="bg-[#0d1424] border border-slate-800 rounded-2xl p-8 text-center text-xs text-slate-500">No schedules configured.</div>`;
     return;
   }
 
@@ -431,10 +415,10 @@ function renderDayGroupedSchedules() {
           : `<tr><td colspan="4" class="py-4 px-4 text-center text-xs text-slate-500">No classes scheduled on ${day}.</td></tr>`;
 
       return `
-      <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-        <div class="${accent.header} px-4 py-2.5 border-b flex items-center justify-between">
+      <div class="bg-[#0d1424] border border-slate-800/90 rounded-2xl overflow-hidden shadow-lg shadow-black/20">
+        <div class="${accent.header} px-5 py-3 border-b flex items-center justify-between">
           <span class="text-sm font-bold ${accent.title}">${day}</span>
-          <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold border ${accent.badge}">
+          <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${accent.badge}">
             ${dayItems.length} class${dayItems.length === 1 ? "" : "es"}
           </span>
         </div>
@@ -442,10 +426,10 @@ function renderDayGroupedSchedules() {
           <table class="w-full text-left text-sm">
             <thead>
               <tr class="border-b border-slate-800/70 text-slate-400 text-[11px] uppercase">
-                <th class="py-2 px-4">Code</th>
-                <th class="py-2 px-4">Subject Name</th>
-                <th class="py-2 px-4">Time</th>
-                <th class="py-2 px-4 text-right">Actions</th>
+                <th class="py-2.5 px-4">Code</th>
+                <th class="py-2.5 px-4">Subject Name</th>
+                <th class="py-2.5 px-4">Time</th>
+                <th class="py-2.5 px-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-800/60">${rowsHtml}</tbody>
@@ -503,12 +487,12 @@ function setLogViewMode(mode) {
 
   document.getElementById("mode-table").className =
     mode === "table"
-      ? "px-3 py-1 text-xs font-semibold rounded-md bg-sky-600 text-white"
-      : "px-3 py-1 text-xs font-semibold rounded-md text-slate-400 hover:text-slate-200";
+      ? "px-3 py-1 text-xs font-semibold rounded-lg bg-sky-600 text-white"
+      : "px-3 py-1 text-xs font-semibold rounded-lg text-slate-400 hover:text-slate-200";
   document.getElementById("mode-calendar").className =
     mode === "calendar"
-      ? "px-3 py-1 text-xs font-semibold rounded-md bg-sky-600 text-white"
-      : "px-3 py-1 text-xs font-semibold rounded-md text-slate-400 hover:text-slate-200";
+      ? "px-3 py-1 text-xs font-semibold rounded-lg bg-sky-600 text-white"
+      : "px-3 py-1 text-xs font-semibold rounded-lg text-slate-400 hover:text-slate-200";
 
   refreshLogsDisplay();
 }
@@ -546,7 +530,7 @@ function renderDayGroupedLogsTable(filteredLogs) {
   const container = document.getElementById("logsTableContainer");
   if (filteredLogs.length === 0) {
     const activeDate = getActiveLogDateFilter();
-    container.innerHTML = `<div class="py-8 text-center text-xs text-slate-500">${activeDate ? `No attendance records found for ${formatHumanDate(activeDate)}.` : "No attendance records found."}</div>`;
+    container.innerHTML = `<div class="py-10 text-center text-xs text-slate-500">${activeDate ? `No attendance records found for ${formatHumanDate(activeDate)}.` : "No attendance records found."}</div>`;
     return;
   }
 
@@ -570,14 +554,14 @@ function renderDayGroupedLogsTable(filteredLogs) {
 
           return `
         <tr class="hover:bg-slate-800/35 transition">
-          <td class="py-2.5 px-4">
+          <td class="py-3 px-4">
             <div class="font-medium text-slate-100">${l.full_name}</div>
             <div class="font-mono text-[11px] text-slate-400">${l.student_id}</div>
           </td>
-          <td class="py-2.5 px-4 text-slate-200">${codeBadge}${l.subject}</td>
-          <td class="py-2.5 px-4"><span class="px-2.5 py-0.5 rounded-full text-xs font-bold ${badgeClass(l.status)}">${l.status}</span></td>
-          <td class="py-2.5 px-4 font-mono text-xs text-slate-300">${l.time_str}</td>
-          <td class="py-2.5 px-4 text-right">
+          <td class="py-3 px-4 text-slate-200">${codeBadge}${l.subject}</td>
+          <td class="py-3 px-4"><span class="px-2.5 py-0.5 rounded-full text-xs font-bold ${badgeClass(l.status)}">${l.status}</span></td>
+          <td class="py-3 px-4 font-mono text-xs text-slate-300">${l.time_str}</td>
+          <td class="py-3 px-4 text-right">
             <div class="inline-flex items-center justify-end gap-1">
               ${proofBtn}
               <button type="button" onclick="deleteSingleLog(${l.id})" title="Delete This Log" aria-label="Delete This Log" class="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition">
@@ -592,7 +576,7 @@ function renderDayGroupedLogsTable(filteredLogs) {
 
       return `
       <div class="border border-slate-800 rounded-xl overflow-hidden">
-        <div class="bg-slate-800/60 px-4 py-2 border-b border-slate-800 flex items-center justify-between">
+        <div class="bg-slate-900/90 px-4 py-2.5 border-b border-slate-800 flex items-center justify-between">
           <span class="text-xs font-bold text-sky-300">${formatHumanDate(dateKey)}</span>
           <span class="text-[11px] text-slate-400">${dayLogs.length} record${dayLogs.length === 1 ? "" : "s"}</span>
         </div>
@@ -600,11 +584,11 @@ function renderDayGroupedLogsTable(filteredLogs) {
           <table class="w-full text-left text-sm border-collapse">
             <thead>
               <tr class="border-b border-slate-800/70 text-slate-400 text-[11px] uppercase">
-                <th class="py-2 px-4">Student</th>
-                <th class="py-2 px-4">Subject</th>
-                <th class="py-2 px-4">Status</th>
-                <th class="py-2 px-4">Time</th>
-                <th class="py-2 px-4 text-right">Actions</th>
+                <th class="py-2.5 px-4">Student</th>
+                <th class="py-2.5 px-4">Subject</th>
+                <th class="py-2.5 px-4">Status</th>
+                <th class="py-2.5 px-4">Time</th>
+                <th class="py-2.5 px-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-800/60">${rowsHtml}</tbody>
@@ -710,7 +694,7 @@ function renderAttendanceCalendar(filteredLogs) {
           : "";
 
       html += `
-        <div onclick="inspectCalendarDate('${dateKey}')" class="min-h-[94px] p-1.5 border-r last:border-r-0 border-slate-800/80 cursor-pointer transition hover:bg-slate-800/50 ${inCurrentMonth ? "bg-slate-950/40" : "bg-slate-900/40 opacity-45"}">
+        <div onclick="inspectCalendarDate('${dateKey}')" class="min-h-[96px] p-1.5 border-r last:border-r-0 border-slate-800/80 cursor-pointer transition hover:bg-slate-800/50 ${inCurrentMonth ? "bg-slate-950/40" : "bg-slate-900/40 opacity-45"}">
           <div class="flex justify-between items-center mb-1">
             <span class="text-xs font-semibold ${isToday ? "px-1.5 py-0.5 rounded bg-sky-500 text-slate-950" : "text-slate-300"}">${cellDate.getDate()}</span>
           </div>
@@ -750,7 +734,7 @@ function inspectCalendarDate(dateKey) {
       ${filtered
         .map(
           (l) => `
-        <div class="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-between gap-2">
+        <div class="px-3 py-2 rounded-lg bg-slate-950/80 border border-slate-800 flex items-center justify-between gap-2">
           <div class="min-w-0 truncate">
             <span class="font-semibold text-slate-100">${l.full_name}</span>
             <span class="font-mono text-indigo-300 ml-1.5">${l.subject_code || l.subject}</span>
@@ -822,17 +806,17 @@ function toggleEditStudent(studentId) {
 
   const card = document.getElementById("enrollFormCard");
   card.className =
-    "bg-sky-950/15 border border-sky-500/50 ring-1 ring-sky-500/20 rounded-xl p-5 self-start transition-colors";
+    "lg:col-span-4 bg-sky-950/15 border border-sky-500/50 ring-1 ring-sky-500/20 rounded-2xl p-6 transition-colors shadow-xl shadow-black/25";
 
   document.getElementById("enrollFormTitle").textContent = "Edit Student";
   document.getElementById("enrollFormTitle").className =
-    "text-base font-semibold text-sky-300";
+    "text-base font-bold text-sky-300";
   document.getElementById("cancelEditStudentBtn").classList.remove("hidden");
 
   const submitBtn = document.getElementById("enrollSubmitBtn");
   submitBtn.textContent = "Save Changes";
   submitBtn.className =
-    "w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold py-2 rounded-lg transition";
+    "w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold py-2.5 rounded-lg transition";
 
   document.getElementById("enrollId").value = student.student_id;
   document.getElementById("enrollName").value = student.full_name;
@@ -851,17 +835,17 @@ function resetStudentForm() {
 
   const card = document.getElementById("enrollFormCard");
   card.className =
-    "bg-slate-900 border border-slate-800 rounded-xl p-5 self-start transition-colors";
+    "lg:col-span-4 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-6 transition-colors shadow-xl shadow-black/25";
 
   document.getElementById("enrollFormTitle").textContent = "Enroll Student";
   document.getElementById("enrollFormTitle").className =
-    "text-base font-semibold text-slate-100";
+    "text-base font-bold text-white";
   document.getElementById("cancelEditStudentBtn").classList.add("hidden");
 
   const submitBtn = document.getElementById("enrollSubmitBtn");
   submitBtn.textContent = "Capture & Save";
   submitBtn.className =
-    "w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-lg transition";
+    "w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-lg transition";
 
   document.getElementById("enrollId").value = "";
   document.getElementById("enrollName").value = "";
@@ -939,17 +923,17 @@ function toggleEditSchedule(schedId) {
 
   const card = document.getElementById("schedFormCard");
   card.className =
-    "bg-sky-950/15 border border-sky-500/50 ring-1 ring-sky-500/20 rounded-xl p-5 self-start transition-colors";
+    "lg:col-span-4 bg-sky-950/15 border border-sky-500/50 ring-1 ring-sky-500/20 rounded-2xl p-6 transition-colors shadow-xl shadow-black/25";
 
   document.getElementById("schedFormTitle").textContent = "Edit Schedule";
   document.getElementById("schedFormTitle").className =
-    "text-base font-semibold text-sky-300";
+    "text-base font-bold text-sky-300";
   document.getElementById("cancelEditSchedBtn").classList.remove("hidden");
 
   const submitBtn = document.getElementById("schedSubmitBtn");
   submitBtn.textContent = "Save Changes";
   submitBtn.className =
-    "w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold py-2 rounded-lg transition";
+    "w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold py-2.5 rounded-lg transition";
 
   document.getElementById("schedDay").value = sched.day_of_week;
   document.getElementById("schedCode").value = sched.subject_code || "";
@@ -965,17 +949,17 @@ function resetScheduleForm() {
 
   const card = document.getElementById("schedFormCard");
   card.className =
-    "bg-slate-900 border border-slate-800 rounded-xl p-5 self-start transition-colors";
+    "lg:col-span-4 bg-[#0d1424] border border-slate-800/90 rounded-2xl p-6 transition-colors shadow-xl shadow-black/25";
 
   document.getElementById("schedFormTitle").textContent = "Add Schedule";
   document.getElementById("schedFormTitle").className =
-    "text-base font-semibold text-slate-100";
+    "text-base font-bold text-white";
   document.getElementById("cancelEditSchedBtn").classList.add("hidden");
 
   const submitBtn = document.getElementById("schedSubmitBtn");
   submitBtn.textContent = "Save Schedule";
   submitBtn.className =
-    "w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 rounded-lg transition";
+    "w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-lg transition";
 
   document.getElementById("schedCode").value = "";
   document.getElementById("schedSubject").value = "";
@@ -1022,27 +1006,9 @@ async function deleteSchedule(id) {
   loadDashboardData();
 }
 
-async function quickMarkAbsent(subject) {
-  const res = await fetch("/api/mark_absences", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ subject }),
-  });
-  const data = await res.json();
-  alert(data.message);
-  loadDashboardData();
-}
-
-async function markRemainingAbsent() {
-  const subject = document.getElementById("absenceSubjectSelect").value;
-  await quickMarkAbsent(subject);
-  closeManageModal();
-}
-
 async function clearTestLogs() {
   if (!confirm("Clear all attendance logs?")) return;
   await fetch("/api/logs/clear", { method: "DELETE" });
-  closeManageModal();
   document.getElementById("calendarDayDetail").textContent =
     "Click a date above to view attendance details.";
   loadDashboardData();
