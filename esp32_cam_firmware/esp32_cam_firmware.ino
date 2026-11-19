@@ -124,7 +124,7 @@ bool hasSceneChanged(camera_fb_t* fb) {
 }
 
 // ==========================================
-// 4. CAMERA (OV2640 TUNED) & MICROSD SETUP
+// 4. CAMERA (OV2640 INDOOR LOW-LIGHT TUNED) & MICROSD SETUP
 // ==========================================
 bool initCamera() {
   camera_config_t config;
@@ -146,10 +146,11 @@ bool initCamera() {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn     = PWDN_GPIO_NUM;
   config.pin_reset    = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 20000000;
+
+  // 10 MHz XCLK doubles the OV2640's max per-frame exposure time for bright indoor captures without a flashlight
+  config.xclk_freq_hz = 10000000;
   config.pixel_format = PIXFORMAT_JPEG;
 
-  // Higher JPEG quality (10) preserves facial edge texture for YuNet & anti-spoof checks
   if (psramFound()) {
     config.frame_size   = FRAMESIZE_VGA;
     config.jpeg_quality = 10;
@@ -165,33 +166,37 @@ bool initCamera() {
     return false;
   }
 
-  // Register-level OV2640 calibration for sharp indoor facial clarity
+  // Register-level OV2640 indoor low-light & facial clarity calibration
   sensor_t* s = esp_camera_sensor_get();
   if (s != nullptr) {
-    s->set_brightness(s, 1);                  // Slight boost (-2 to 2) for indoor lighting
-    s->set_contrast(s, 1);                    // Sharper facial edge contrast (-2 to 2)
-    s->set_saturation(s, 0);                  // Natural color balance
-    s->set_sharpness(s, 2);                   // Enhance fine edge detail (-2 to 2)
+    s->set_brightness(s, 2);                  // Max indoor brightness boost (-2 to 2)
+    s->set_contrast(s, 1);                    // Crisp facial edge contrast (-2 to 2)
+    s->set_saturation(s, 0);                  // Natural skin tones
+    s->set_sharpness(s, 2);                   // Sharpen facial landmarks (-2 to 2)
     s->set_whitebal(s, 1);                    // Enable Auto White Balance
     s->set_awb_gain(s, 1);                    // Enable AWB Gain
     s->set_wb_mode(s, 0);                     // Auto WB mode
     s->set_exposure_ctrl(s, 1);               // Enable Auto Exposure Control
-    s->set_aec2(s, 1);                        // Enable DSP auto-exposure
-    s->set_ae_level(s, 1);                    // Slightly brighter exposure target (-2 to 2)
+    s->set_aec2(s, 1);                        // Enable DSP Night/Indoor Auto Exposure
+    s->set_ae_level(s, 2);                    // Higher auto-exposure target (+2)
     s->set_gain_ctrl(s, 1);                   // Enable Auto Gain Control
-    s->set_gainceiling(s, (gainceiling_t)3);  // GAINCEILING_8X to reduce low-light blur
+    s->set_gainceiling(s, (gainceiling_t)5);  // GAINCEILING_32X for normal room lighting
     s->set_bpc(s, 1);                         // Black pixel correction
     s->set_wpc(s, 1);                         // White pixel correction
     s->set_raw_gma(s, 1);                     // Gamma curve correction
     s->set_lenc(s, 1);                        // Lens shading correction
     s->set_dcw(s, 1);                         // Downsize EN
+
+    // Disable night-mode clock divider override and lift low-light exposure floor
+    s->set_reg(s, 0x11, 0xff, 0x01);          // CLKRC: internal clock prescaler for steady indoor exposure
+    s->set_reg(s, 0x0f, 0xff, 0x4b);          // COM6: enable indoor anti-banding timing
   }
 
-  // Warm up AEC/AWB registers on initial frames
-  for (int i = 0; i < 4; i++) {
+  // Warm up AEC/AGC registers across 8 frames so indoor exposure settles completely
+  for (int i = 0; i < 8; i++) {
     camera_fb_t* warmup = esp_camera_fb_get();
     if (warmup) esp_camera_fb_return(warmup);
-    delay(60);
+    delay(80);
   }
 
   return true;
