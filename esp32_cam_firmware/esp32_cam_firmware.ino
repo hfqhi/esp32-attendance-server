@@ -60,8 +60,8 @@ RTC_DATA_ATTR uint32_t bufferCounter = 1;
 struct TimeStamps {
   String dayName;    // Friday
   String dateIso;    // 2026-11-20
-  String timeFile;   // 03-14-00AM
-  String timeHuman;  // 03:14:00 AM
+  String timeFile;   // 03-29-00AM
+  String timeHuman;  // 03:29:00 AM
   bool validNtp;
 };
 
@@ -137,7 +137,7 @@ bool hasSignificantMotion(camera_fb_t* fb) {
 }
 
 // ==========================================
-// 4. EXACT ARDUINO CAMERAWEBSERVER OV2640 INITIALIZATION
+// 4. CAMERA INITIALIZATION & ORIENTATION
 // ==========================================
 bool initCamera() {
   camera_config_t config;
@@ -160,7 +160,6 @@ bool initCamera() {
   config.pin_pwdn     = PWDN_GPIO_NUM;
   config.pin_reset    = RESET_GPIO_NUM;
 
-  // Exact CameraWebServer configuration: 20 MHz XCLK + UXGA init -> VGA drop-down
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
   config.frame_size   = FRAMESIZE_UXGA;
@@ -182,20 +181,17 @@ bool initCamera() {
     return false;
   }
 
-  // Exact CameraWebServer OV2640 register profile (crisp contrast, natural light, hmirror)
   sensor_t* s = esp_camera_sensor_get();
   if (s != nullptr) {
     if (s->id.PID == OV3660_PID) {
-      s->set_vflip(s, 1);
       s->set_brightness(s, 1);
       s->set_saturation(s, -2);
     }
-    // Drop down frame size from UXGA to VGA (640x480) for higher frame rate with full FOV
     s->set_framesize(s, FRAMESIZE_VGA);
-    s->set_hmirror(s, 1);
+    s->set_hmirror(s, 0);
+    s->set_vflip(s, 0);
   }
 
-  // Warm up AWB/AEC across initial frames
   for (int i = 0; i < 6; i++) {
     camera_fb_t* warmup = esp_camera_fb_get();
     if (warmup) esp_camera_fb_return(warmup);
@@ -441,7 +437,7 @@ void serviceMjpegStream() {
 void setup() {
   Serial.begin(115200);
   delay(250);
-  Serial.println("\n=== CPE-3B ESP32-CAM CameraWebServer-Profile Node ===");
+  Serial.println("\n=== CPE-3B ESP32-CAM Camera Node ===");
 
   pinMode(ONBOARD_LED_PIN, OUTPUT);
   digitalWrite(ONBOARD_LED_PIN, HIGH);
