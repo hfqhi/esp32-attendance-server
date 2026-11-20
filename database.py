@@ -71,7 +71,6 @@ def init_db():
         )
     """)
 
-    # Lightweight schema migration for existing DBs
     sched_cols = [r["name"] for r in cursor.execute("PRAGMA table_info(schedules)").fetchall()]
     if "day_of_week" not in sched_cols:
         cursor.execute("ALTER TABLE schedules ADD COLUMN day_of_week TEXT NOT NULL DEFAULT 'Monday'")
@@ -90,7 +89,6 @@ def init_db():
 
 def queue_sd_sync(conn, action, sd_path, local_rel_path="", payload=""):
     """Queues an incremental sync instruction for the ESP32-CAM MicroSD database."""
-    # Deduplicate identical pending tasks for the same target SD path
     conn.execute("DELETE FROM sd_sync_queue WHERE sd_path = ? AND action = ?", (sd_path, action))
     if action == "DELETE_FILE":
         conn.execute("DELETE FROM sd_sync_queue WHERE sd_path = ? AND action = 'DOWNLOAD_FILE'", (sd_path,))
@@ -104,7 +102,11 @@ def queue_sd_sync(conn, action, sd_path, local_rel_path="", payload=""):
 
 
 def sync_daily_csv_both_ends(conn, date_str, subject_code="", subject_name=""):
-    """Regenerates the local daily CSV and queues the identical CSV for the ESP32-CAM SD card."""
+    """
+    Generates identical daily CSV logs at:
+      Local: attendance_logs/<Date>/<SubjectCode>/<Date>_<SubjectCode>_attendance.csv
+      SD:    /attendance_logs/<Date>/<SubjectCode>/<Date>_<SubjectCode>_attendance.csv
+    """
     try:
         dt_obj = datetime.strptime(date_str, "%Y-%m-%d")
         day_name = dt_obj.strftime("%A")
@@ -112,7 +114,6 @@ def sync_daily_csv_both_ends(conn, date_str, subject_code="", subject_name=""):
         day_name = datetime.now().strftime("%A")
 
     subj_slug = sanitize_db_slug(subject_code or subject_name or "General")
-    day_slug = sanitize_db_slug(day_name, "Day")
     date_slug = sanitize_db_slug(date_str, "0000-00-00")
 
     query = "SELECT student_id, full_name, subject_code, subject, status, date_str, time_str, proof_image FROM attendance_logs WHERE date_str = ?"
@@ -127,16 +128,17 @@ def sync_daily_csv_both_ends(conn, date_str, subject_code="", subject_name=""):
 
     rows = conn.execute(query, params).fetchall()
 
-    local_dir = os.path.join("captured_proofs", day_slug, date_slug, subj_slug)
+    csv_filename = f"{date_slug}_{subj_slug}_attendance.csv"
+    local_dir = os.path.join("attendance_logs", date_slug, subj_slug)
     os.makedirs(local_dir, exist_ok=True)
-    local_csv_path = os.path.join(local_dir, f"{date_slug}_attendance.csv")
-    sd_csv_path = f"/{day_slug}/{subj_slug}/capture_log/{date_slug}_attendance.csv"
+    local_csv_path = os.path.join(local_dir, csv_filename)
+    sd_csv_path = f"/attendance_logs/{date_slug}/{subj_slug}/{csv_filename}"
 
     if not rows:
         if os.path.exists(local_csv_path):
             os.remove(local_csv_path)
         queue_sd_sync(conn, "DELETE_FILE", sd_csv_path)
-        return
+        return ""
 
     with open(local_csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -155,8 +157,20 @@ def sync_daily_csv_both_ends(conn, date_str, subject_code="", subject_name=""):
                 capture_fname,
             ])
 
-    local_rel = os.path.join("captured_proofs", day_slug, date_slug, subj_slug, f"{date_slug}_attendance.csv").replace("\\", "/")
+    local_rel = os.path.join("attendance_logs", date_slug, subj_slug, csv_filename).replace("\\", "/")
     queue_sd_sync(conn, "DOWNLOAD_FILE", sd_csv_path, local_rel_path=local_rel)
+    return local_rel
+
+
+def rebuild_all_daily_csvs(conn):
+    """Ensures every (date_str, subject_code, subject) in attendance_logs has an up-to-date local CSV."""
+    groups = conn.execute("SELECT DISTINCT date_str, subject_code, subject FROM attendance_logs").fetchall()
+    generated = []
+    for g in groups:
+        rel = sync_daily_csv_both_ends(conn, g["date_str"], subject_code=g["subject_code"], subject_name=g["subject"])
+        if rel:
+            generated.append(rel)
+    return generated
 
 
 def time_to_minutes(t_str):
