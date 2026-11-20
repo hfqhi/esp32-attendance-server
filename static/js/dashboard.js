@@ -36,7 +36,6 @@ const ICONS = {
   photo: `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/></svg>`,
 };
 
-// Distinct per-day palette (Cobalt Blue Monday vs Emerald Green Wednesday)
 const DAY_ACCENTS = {
   Monday: {
     header: "bg-blue-950/55 border-blue-800/60",
@@ -121,13 +120,21 @@ function formatHumanDate(yyyyMmDd) {
   return yyyyMmDd === getTodayDateString() ? `Today • ${formatted}` : formatted;
 }
 
-setInterval(() => {
+function updateLiveClock() {
+  const clockEl = document.getElementById("liveClock");
+  if (!clockEl) return;
   const now = new Date();
-  const dayName = now.toLocaleDateString("en-US", { weekday: "short" });
-  document.getElementById("liveClock").textContent =
-    `${dayName} • ${now.toLocaleTimeString()}`;
-}, 1000);
+  const dateLabel = now.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+  clockEl.textContent = `${dateLabel} • ${now.toLocaleTimeString()}`;
+}
 
+updateLiveClock();
+setInterval(updateLiveClock, 1000);
 setInterval(loadDashboardData, 8000);
 
 function format12Hour(time24) {
@@ -424,7 +431,7 @@ function renderDayGroupedSchedules() {
     .join("");
 }
 
-// --- ATTENDANCE LOGS (WITH SINGLE LOG DELETE & PROOF PREVIEW) ---
+// --- ATTENDANCE LOGS ---
 function onLogDateScopeChange() {
   const scope = document.getElementById("logDateScope").value;
   const dateInput = document.getElementById("filterDate");
