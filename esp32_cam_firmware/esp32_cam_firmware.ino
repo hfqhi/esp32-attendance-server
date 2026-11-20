@@ -38,6 +38,7 @@ const int   DAYLIGHT_OFF  = 0;
 #define VSYNC_GPIO_NUM    25
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
+#define FLASH_LED_PIN      4
 #define ONBOARD_LED_PIN   33
 
 WebServer camHttpServer(80);
@@ -47,7 +48,7 @@ WiFiClient streamClient;
 bool sdAvailable = false;
 unsigned long lastCaptureMs = 0;
 unsigned long lastHeartbeatMs = 0;
-const unsigned long CAPTURE_INTERVAL_MS = 1000;
+const unsigned long CAPTURE_INTERVAL_MS = 550;
 const unsigned long HEARTBEAT_INTERVAL_MS = 8000;
 
 uint8_t prevSample[64] = {0};
@@ -55,20 +56,25 @@ size_t prevFrameLen = 0;
 RTC_DATA_ATTR uint32_t bufferCounter = 1;
 
 // ==========================================
-// 2. TIMESTAMP & PATH HELPERS
+// 2. TIMESTAMP & SD DIRECTORY HELPERS
 // ==========================================
 struct TimeStamps {
   String dayName;    // Friday
   String dateIso;    // 2026-11-20
-  String timeFile;   // 03-29-00AM
-  String timeHuman;  // 03:29:00 AM
+  String timeFile;   // 06-40-00PM
+  String timeHuman;  // 06:40:00 PM
   bool validNtp;
 };
+
+void keepFlashGroundedOff() {
+  pinMode(FLASH_LED_PIN, OUTPUT);
+  digitalWrite(FLASH_LED_PIN, LOW);
+}
 
 TimeStamps getCurrentTimestamps() {
   TimeStamps ts;
   struct tm timeinfo;
-  if (getLocalTime(&timeinfo, 50)) {
+  if (getLocalTime(&timeinfo, 40)) {
     char dDay[16], dIso[16], tFile[16], tHuman[16];
     strftime(dDay, sizeof(dDay), "%A", &timeinfo);
     strftime(dIso, sizeof(dIso), "%Y-%m-%d", &timeinfo);
@@ -107,6 +113,20 @@ void ensureDir(const String& path) {
   }
 }
 
+String ensureCaptureLogDir(const String& dayName, const String& subjectCode) {
+  String daySlug = sanitizeSlug(dayName, "Day");
+  String subjSlug = sanitizeSlug(subjectCode, "General");
+
+  String dayDir = "/" + daySlug;
+  String subjDir = dayDir + "/" + subjSlug;
+  String logDir = subjDir + "/capture_log";
+
+  ensureDir(dayDir);
+  ensureDir(subjDir);
+  ensureDir(logDir);
+  return logDir;
+}
+
 // ==========================================
 // 3. PRESENCE / MOTION GATE
 // ==========================================
@@ -114,7 +134,7 @@ bool hasSignificantMotion(camera_fb_t* fb) {
   if (!fb || fb->len < 1024) return false;
 
   long lenDiff = abs((long)fb->len - (long)prevFrameLen);
-  bool sizeChanged = (prevFrameLen == 0) || (lenDiff > (long)(prevFrameLen * 0.10));
+  bool sizeChanged = (prevFrameLen == 0) || (lenDiff > (long)(prevFrameLen * 0.08));
 
   uint8_t currSample[64];
   size_t usable = fb->len > 512 ? fb->len - 512 : fb->len;
@@ -126,18 +146,18 @@ bool hasSignificantMotion(camera_fb_t* fb) {
     size_t idx = 256 + i * step;
     if (idx >= fb->len) idx = fb->len - 1;
     currSample[i] = fb->buf[idx];
-    if (abs((int)currSample[i] - (int)prevSample[i]) > 22) {
+    if (abs((int)currSample[i] - (int)prevSample[i]) > 18) {
       diffCount++;
     }
     prevSample[i] = currSample[i];
   }
   prevFrameLen = fb->len;
 
-  return sizeChanged || (diffCount >= 22);
+  return sizeChanged || (diffCount >= 18);
 }
 
 // ==========================================
-// 4. CAMERA INITIALIZATION & ORIENTATION
+// 4. CAMERA INITIALIZATION (PRESERVED LIGHTING + UPRIGHT VGA)
 // ==========================================
 bool initCamera() {
   camera_config_t config;
@@ -195,81 +215,85 @@ bool initCamera() {
   for (int i = 0; i < 6; i++) {
     camera_fb_t* warmup = esp_camera_fb_get();
     if (warmup) esp_camera_fb_return(warmup);
-    delay(40);
+    delay(35);
   }
 
   return true;
 }
 
 bool initMicroSD() {
+  // 1-bit SD mode leaves GPIO 4 free; re-assert GPIO 4 LOW immediately after mount
   if (!SD_MMC.begin("/sdcard", true)) {
+    keepFlashGroundedOff();
     Serial.println("[SD] Mount failed. Verify FAT32 format.");
     return false;
   }
+  keepFlashGroundedOff();
+
   if (SD_MMC.cardType() == CARD_NONE) return false;
 
   ensureDir("/enrolled_faces");
-  ensureDir("/attendance_captures");
-  ensureDir("/logs");
   ensureDir("/offline_buffer");
-  Serial.println("[SD] Photo & Log Database ready (/attendance_captures, /logs, /enrolled_faces).");
+  Serial.println("[SD] Ready (/enrolled_faces & /<Day>/<SubjectCode>/capture_log).");
   return true;
 }
 
-void logStructuredAttendanceToSd(const String& studentName, const String& subjectCode, const String& status, const TimeStamps& ts, const String& photoRelPath) {
-  if (!sdAvailable) return;
-
-  String daySlug = sanitizeSlug(ts.dayName, "Day");
-  String dateSlug = sanitizeSlug(ts.dateIso, "Date");
-  String subjSlug = sanitizeSlug(subjectCode, "General");
-
-  String dayDir = "/logs/" + daySlug;
-  String dateDir = dayDir + "/" + dateSlug;
-  ensureDir(dayDir);
-  ensureDir(dateDir);
-
-  String csvPath = dateDir + "/" + subjSlug + "_attendance.csv";
-  bool isNew = !SD_MMC.exists(csvPath);
-
-  File f = SD_MMC.open(csvPath, isNew ? FILE_WRITE : FILE_APPEND);
-  if (f) {
-    if (isNew) {
-      f.println("Student Name,Subject Code,Status,Day,Date,Time,SD Photo Path");
-    }
-    f.printf("\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"\n",
-             studentName.c_str(), subjSlug.c_str(), status.c_str(),
-             ts.dayName.c_str(), ts.dateIso.c_str(), ts.timeHuman.c_str(),
-             photoRelPath.c_str());
-    f.close();
-  }
-}
-
-String saveStructuredAttendanceCapture(camera_fb_t* fb, const String& studentName, const String& subjectCode, const TimeStamps& ts) {
+// ==========================================
+// 5. STRUCTURED SD DATABASE STORAGE
+// ==========================================
+String saveCapturePhotoAndLogToSd(
+  camera_fb_t* fb,
+  const String& studentId,
+  const String& studentName,
+  const String& subjectCode,
+  const String& status,
+  const TimeStamps& ts
+) {
   if (!sdAvailable || !fb) return "";
 
-  String daySlug = sanitizeSlug(ts.dayName, "Day");
-  String dateSlug = sanitizeSlug(ts.dateIso, "Date");
+  String logDir   = ensureCaptureLogDir(ts.dayName, subjectCode);
+  String dateSlug = sanitizeSlug(ts.dateIso, "0000-00-00");
   String subjSlug = sanitizeSlug(subjectCode, "General");
-  String stuSlug = sanitizeSlug(studentName, "Student");
+  String idSlug   = sanitizeSlug(studentId, "ID");
+  String stuSlug  = sanitizeSlug(studentName, "Student");
+  String statSlug = sanitizeSlug(status, "PRESENT");
 
-  String dayDir = "/attendance_captures/" + daySlug;
-  String dateDir = dayDir + "/" + dateSlug;
-  String subjDir = dateDir + "/" + subjSlug;
-  ensureDir(dayDir);
-  ensureDir(dateDir);
-  ensureDir(subjDir);
+  // Optimized filename: <Date>_<Time>_<StudentID>_<StudentName>_<Status>.jpg
+  String photoFileName = dateSlug + "_" + ts.timeFile + "_" + idSlug + "_" + stuSlug + "_" + statSlug + ".jpg";
+  String photoFullPath = logDir + "/" + photoFileName;
 
-  String fileName = stuSlug + "_" + subjSlug + "_" + dateSlug + "_" + ts.timeFile + ".jpg";
-  String fullPath = subjDir + "/" + fileName;
-
-  File img = SD_MMC.open(fullPath, FILE_WRITE);
+  File img = SD_MMC.open(photoFullPath, FILE_WRITE);
   if (img) {
     img.write(fb->buf, fb->len);
     img.close();
-    Serial.printf("[SD-DB] Stored attendance photo: %s\n", fullPath.c_str());
-    return fullPath;
+    Serial.printf("[SD-DB] Saved capture: %s\n", photoFullPath.c_str());
+  } else {
+    photoFullPath = "";
   }
-  return "";
+
+  // Per-day, per-subject CSV capture log inside /<Day>/<SubjectCode>/capture_log/
+  String csvPath = logDir + "/" + dateSlug + "_attendance.csv";
+  bool isNew = !SD_MMC.exists(csvPath);
+
+  File csvFile = SD_MMC.open(csvPath, isNew ? FILE_WRITE : FILE_APPEND);
+  if (csvFile) {
+    if (isNew) {
+      csvFile.println("Student ID,Student Name,Subject Code,Status,Day,Date,Time,Capture File");
+    }
+    csvFile.printf("\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"\n",
+                   idSlug.c_str(),
+                   studentName.c_str(),
+                   subjSlug.c_str(),
+                   statSlug.c_str(),
+                   ts.dayName.c_str(),
+                   ts.dateIso.c_str(),
+                   ts.timeHuman.c_str(),
+                   photoFileName.c_str());
+    csvFile.close();
+  }
+
+  keepFlashGroundedOff();
+  return photoFullPath;
 }
 
 void bufferFrameSilentlyWhenOffline(camera_fb_t* fb, const TimeStamps& ts) {
@@ -289,17 +313,18 @@ void bufferFrameSilentlyWhenOffline(camera_fb_t* fb, const TimeStamps& ts) {
     img.write(fb->buf, fb->len);
     img.close();
   }
+  keepFlashGroundedOff();
 }
 
 // ==========================================
-// 5. SERVER SYNC: REGISTER IP, PORTRAITS & OFFLINE BUFFER
+// 6. SERVER SYNC: HEARTBEAT, ENROLLED PORTRAITS & OFFLINE BUFFER
 // ==========================================
 void sendHeartbeatToServer() {
   if (WiFi.status() != WL_CONNECTED) return;
   HTTPClient http;
   http.begin(String(SERVER_BASE) + "/api/esp32/register");
   http.addHeader("Content-Type", "application/json");
-  http.setTimeout(2500);
+  http.setTimeout(2000);
 
   String body = "{\"ip\":\"" + WiFi.localIP().toString() + "\"}";
   http.POST(body);
@@ -335,6 +360,7 @@ void syncEnrolledPortraitsFromServer() {
     }
   }
   http.end();
+  keepFlashGroundedOff();
 }
 
 void syncOfflineBufferToServer() {
@@ -364,18 +390,18 @@ void syncOfflineBufferToServer() {
         if (code == 200) {
           JsonDocument doc;
           if (!deserializeJson(doc, http.getString())) {
-            const char* status = doc["status"] | "UNKNOWN";
-            const char* stuName = doc["student_name"] | "";
+            const char* status   = doc["status"] | "UNKNOWN";
+            const char* stuId    = doc["student_id"] | "ID";
+            const char* stuName  = doc["student_name"] | "";
             const char* subjCode = doc["subject_code"] | "General";
-            const char* attStat = doc["attendance_status"] | "PRESENT";
+            const char* attStat  = doc["attendance_status"] | "PRESENT";
             TimeStamps ts = getCurrentTimestamps();
 
             if (strcmp(status, "LOGGED") == 0 && strlen(stuName) > 0) {
               camera_fb_t fakeFb;
               fakeFb.buf = buf;
               fakeFb.len = fsize;
-              String savedPath = saveStructuredAttendanceCapture(&fakeFb, stuName, subjCode, ts);
-              logStructuredAttendanceToSd(stuName, subjCode, attStat, ts, savedPath);
+              saveCapturePhotoAndLogToSd(&fakeFb, stuId, stuName, subjCode, attStat, ts);
             }
             SD_MMC.remove(entryPath);
           }
@@ -391,10 +417,11 @@ void syncOfflineBufferToServer() {
     entry = root.openNextFile();
   }
   root.close();
+  keepFlashGroundedOff();
 }
 
 // ==========================================
-// 6. WEB DASHBOARD CAMERA STREAMING ENDPOINTS
+// 7. HIGH-SPEED WEB DASHBOARD STREAMING ENDPOINTS
 // ==========================================
 void handleSingleCapture() {
   camera_fb_t* fb = esp_camera_fb_get();
@@ -426,18 +453,18 @@ void serviceMjpegStream() {
       streamClient.write(fb->buf, fb->len);
       streamClient.print("\r\n");
       esp_camera_fb_return(fb);
-      yield();
     }
   }
 }
 
 // ==========================================
-// 7. SETUP & MAIN LOOP
+// 8. SETUP & MAIN LOOP
 // ==========================================
 void setup() {
+  keepFlashGroundedOff();
   Serial.begin(115200);
-  delay(250);
-  Serial.println("\n=== CPE-3B ESP32-CAM Camera Node ===");
+  delay(200);
+  Serial.println("\n=== CPE-3B ESP32-CAM v2 Node ===");
 
   pinMode(ONBOARD_LED_PIN, OUTPUT);
   digitalWrite(ONBOARD_LED_PIN, HIGH);
@@ -448,6 +475,7 @@ void setup() {
   }
 
   sdAvailable = initMicroSD();
+  keepFlashGroundedOff();
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
@@ -456,7 +484,7 @@ void setup() {
 
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 25) {
-    delay(500);
+    delay(400);
     Serial.print(".");
     attempts++;
   }
@@ -475,12 +503,14 @@ void setup() {
   } else {
     Serial.println("\n[WIFI] Offline — buffering frames until reconnect");
   }
+  keepFlashGroundedOff();
 }
 
 void loop() {
   if (WiFi.status() == WL_CONNECTED) {
     camHttpServer.handleClient();
     serviceMjpegStream();
+    yield();
 
     if (millis() - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
       lastHeartbeatMs = millis();
@@ -511,7 +541,7 @@ void loop() {
   http.begin(String(SERVER_BASE) + "/api/verify_frame");
   http.addHeader("Content-Type", "image/jpeg");
   http.addHeader("X-Camera-Source", "esp32");
-  http.setTimeout(3000);
+  http.setTimeout(2500);
 
   int httpCode = http.POST(fb->buf, fb->len);
   if (httpCode == 200) {
@@ -519,6 +549,7 @@ void loop() {
     if (!deserializeJson(doc, http.getString())) {
       const char* status   = doc["status"]  | "UNKNOWN";
       const char* message  = doc["message"] | "";
+      const char* stuId    = doc["student_id"] | "ID";
       const char* stuName  = doc["student_name"] | "";
       const char* subjCode = doc["subject_code"] | "General";
       const char* attStat  = doc["attendance_status"] | "PRESENT";
@@ -527,17 +558,16 @@ void loop() {
 
       if ((strcmp(status, "LOGGED") == 0 || strcmp(status, "ALREADY_LOGGED") == 0) && strlen(stuName) > 0) {
         if (strcmp(status, "LOGGED") == 0) {
-          String savedPath = saveStructuredAttendanceCapture(fb, stuName, subjCode, ts);
-          logStructuredAttendanceToSd(stuName, subjCode, attStat, ts, savedPath);
+          saveCapturePhotoAndLogToSd(fb, stuId, stuName, subjCode, attStat, ts);
 
           for (int i = 0; i < 2; i++) {
             digitalWrite(ONBOARD_LED_PIN, LOW);
-            delay(100);
+            delay(80);
             digitalWrite(ONBOARD_LED_PIN, HIGH);
-            delay(100);
+            delay(80);
           }
         }
-        delay(1500);
+        delay(1200);
       }
     }
   } else {
