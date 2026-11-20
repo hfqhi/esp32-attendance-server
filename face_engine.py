@@ -1,4 +1,5 @@
 import base64
+import math
 import os
 import urllib.request
 from datetime import datetime
@@ -38,9 +39,25 @@ TEXTURE_THRESHOLDS = {
     "webcam": 28.0,
 }
 
+# Centering & steadiness gates so glimpse/off-center faces are not captured prematurely
+MIN_FACE_WIDTH_RATIO = 0.14
+MAX_CENTER_OFFSET_X = 0.22
+MAX_CENTER_OFFSET_Y = 0.22
+MAX_STEADY_SHIFT = 0.045
+REQUIRED_STEADY_FRAMES = 2
+
 recognition_state = {
     "unknown_streak": 0,
+    "steady_student_id": None,
+    "steady_count": 0,
+    "last_center": None,
 }
+
+
+def reset_steady_state():
+    recognition_state["steady_student_id"] = None
+    recognition_state["steady_count"] = 0
+    recognition_state["last_center"] = None
 
 
 def sanitize_slug(text):
@@ -158,6 +175,22 @@ def compute_face_texture(frame, face):
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
 
+def evaluate_face_framing(frame, face):
+    fh, fw, _ = frame.shape
+    x, y, w, h = map(float, face[:4])
+    width_ratio = w / max(1.0, float(fw))
+    cx = (x + w * 0.5) / max(1.0, float(fw))
+    cy = (y + h * 0.5) / max(1.0, float(fh))
+
+    if width_ratio < MIN_FACE_WIDTH_RATIO:
+        return False, "Move Closer to Camera", (cx, cy)
+
+    if abs(cx - 0.5) > MAX_CENTER_OFFSET_X or abs(cy - 0.5) > MAX_CENTER_OFFSET_Y:
+        return False, "Center Face in Frame", (cx, cy)
+
+    return True, "Centered", (cx, cy)
+
+
 def match_best_student(frame, source="webcam"):
     h, w, _ = frame.shape
     detector.setInputSize((w, h))
@@ -188,13 +221,19 @@ def identify_offline_face(image_bytes):
     if raw_frame is None:
         return None, None
     frame = enhance_indoor_frame(raw_frame, source="esp32")
-    _, best_student = match_best_student(frame, source="esp32")
+    face, best_student = match_best_student(frame, source="esp32")
+    if face is None or best_student is None:
+        return None, raw_frame
+    is_centered, _, _ = evaluate_face_framing(frame, face)
+    if not is_centered:
+        return None, raw_frame
     return best_student, raw_frame
 
 
 def verify_instant_presence(image_data, source="webcam"):
     raw_frame = decode_image(image_data)
     if raw_frame is None:
+        reset_steady_state()
         return {"status": "ERROR", "message": "Invalid camera frame"}, None, None
 
     frame = enhance_indoor_frame(raw_frame, source=source)
@@ -202,12 +241,20 @@ def verify_instant_presence(image_data, source="webcam"):
 
     if face is None:
         recognition_state["unknown_streak"] = 0
+        reset_steady_state()
         return {"status": "NO_FACE", "message": "Ready to Scan"}, None, None
 
+    is_centered, framing_msg, center_xy = evaluate_face_framing(frame, face)
+    if not is_centered:
+        recognition_state["unknown_streak"] = 0
+        reset_steady_state()
+        return {"status": "NO_FACE", "message": framing_msg}, None, None
+
     if not best_student:
+        reset_steady_state()
         recognition_state["unknown_streak"] += 1
         if recognition_state["unknown_streak"] < 2:
-            return {"status": "NO_FACE", "message": "Scanning Face..."}, None, None
+            return {"status": "NO_FACE", "message": "Hold Steady — Scanning..."}, None, None
         return {"status": "UNKNOWN", "message": "Unregistered Face — Access Denied"}, None, None
 
     recognition_state["unknown_streak"] = 0
@@ -215,9 +262,32 @@ def verify_instant_presence(image_data, source="webcam"):
     min_texture = TEXTURE_THRESHOLDS.get(source, TEXTURE_THRESHOLDS["webcam"])
     texture = compute_face_texture(frame, face)
     if texture < min_texture:
+        reset_steady_state()
         return {
             "status": "SPOOF",
             "message": "Flat Photo / Screen Blocked"
         }, None, None
 
+    # Require consecutive centered & steady frames before finalizing capture
+    prev_id = recognition_state["steady_student_id"]
+    prev_xy = recognition_state["last_center"]
+    if prev_id == best_student["student_id"] and prev_xy is not None:
+        shift = math.hypot(center_xy[0] - prev_xy[0], center_xy[1] - prev_xy[1])
+        if shift <= MAX_STEADY_SHIFT:
+            recognition_state["steady_count"] += 1
+        else:
+            recognition_state["steady_count"] = 1
+    else:
+        recognition_state["steady_student_id"] = best_student["student_id"]
+        recognition_state["steady_count"] = 1
+
+    recognition_state["last_center"] = center_xy
+
+    if recognition_state["steady_count"] < REQUIRED_STEADY_FRAMES:
+        return {
+            "status": "NO_FACE",
+            "message": f"Hold Steady ({best_student['full_name']})..."
+        }, None, None
+
+    reset_steady_state()
     return None, best_student, raw_frame
