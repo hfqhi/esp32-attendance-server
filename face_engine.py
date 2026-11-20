@@ -60,10 +60,10 @@ def reset_steady_state():
     recognition_state["last_center"] = None
 
 
-def sanitize_slug(text):
+def sanitize_slug(text, fallback="General"):
     clean = "_".join(str(text).strip().split())
     clean = "".join(c for c in clean if c.isalnum() or c in ("-", "_"))
-    return clean or "General"
+    return clean or fallback
 
 
 def decode_image(data_url_or_bytes):
@@ -87,34 +87,43 @@ def save_reference_portrait(image_data, student_id, full_name):
     frame = decode_image(image_data)
     if frame is None:
         return None
-    safe_id = sanitize_slug(student_id)
-    safe_name = sanitize_slug(full_name)
+    safe_id = sanitize_slug(student_id, "ID")
+    safe_name = sanitize_slug(full_name, "Student")
     filename = f"{safe_id}_{safe_name}.jpg"
     cv2.imwrite(os.path.join("enrolled_faces", filename), frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
     return filename
 
 
-def save_proof_snapshot(frame, student_name, subject_code):
-    """Saves attendance proof sorted by Day / Date / SubjectCode."""
+def save_proof_snapshot(frame, student_id, student_name, subject_code, status="PRESENT"):
+    """
+    Saves attendance capture using unified naming:
+    Local: captured_proofs/<Day>/<Date>/<SubjectCode>/<Date>_<Time>_<StudentID>_<StudentName>_<Status>.jpg
+    Returns (local_rel_to_captured_proofs, sd_target_path)
+    """
     if frame is None:
-        return ""
+        return "", ""
     now = datetime.now()
-    day_name = now.strftime("%A")
+    day_slug = sanitize_slug(now.strftime("%A"), "Day")
     date_iso = now.strftime("%Y-%m-%d")
     time_slug = now.strftime("%I-%M-%S%p")
 
-    subj_slug = sanitize_slug(subject_code or "General")
-    rel_dir = os.path.join(day_name, date_iso, subj_slug)
+    subj_slug = sanitize_slug(subject_code or "General", "General")
+    id_slug = sanitize_slug(student_id or "ID", "ID")
+    stu_slug = sanitize_slug(student_name or "Student", "Student")
+    stat_slug = sanitize_slug(status or "PRESENT", "PRESENT")
+
+    fname = f"{date_iso}_{time_slug}_{id_slug}_{stu_slug}_{stat_slug}.jpg"
+    rel_dir = os.path.join(day_slug, date_iso, subj_slug)
 
     abs_dir = os.path.join("captured_proofs", rel_dir)
     os.makedirs(abs_dir, exist_ok=True)
 
-    stu_slug = sanitize_slug(student_name)
-    subj_tag = sanitize_slug(subject_code or "ATT")
-    fname = f"{stu_slug}_{subj_tag}_{date_iso}_{time_slug}.jpg"
     abs_path = os.path.join(abs_dir, fname)
     cv2.imwrite(abs_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
-    return os.path.join(rel_dir, fname).replace("\\", "/")
+
+    local_rel = os.path.join(rel_dir, fname).replace("\\", "/")
+    sd_target = f"/{day_slug}/{subj_slug}/capture_log/{fname}"
+    return local_rel, sd_target
 
 
 def get_enrolled_embeddings():
@@ -268,7 +277,6 @@ def verify_instant_presence(image_data, source="webcam"):
             "message": "Flat Photo / Screen Blocked"
         }, None, None
 
-    # Require consecutive centered & steady frames before finalizing capture
     prev_id = recognition_state["steady_student_id"]
     prev_xy = recognition_state["last_center"]
     if prev_id == best_student["student_id"] and prev_xy is not None:
