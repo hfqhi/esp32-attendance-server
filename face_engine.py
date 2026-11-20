@@ -12,6 +12,7 @@ from database import get_db
 os.makedirs("models", exist_ok=True)
 os.makedirs("enrolled_faces", exist_ok=True)
 os.makedirs("captured_proofs", exist_ok=True)
+os.makedirs("attendance_logs", exist_ok=True)
 
 YUNET_PATH = "models/face_detection_yunet_2023mar.onnx"
 SFACE_PATH = "models/face_recognition_sface_2021dec.onnx"
@@ -39,7 +40,6 @@ TEXTURE_THRESHOLDS = {
     "webcam": 28.0,
 }
 
-# Centering & steadiness gates so glimpse/off-center faces are not captured prematurely
 MIN_FACE_WIDTH_RATIO = 0.14
 MAX_CENTER_OFFSET_X = 0.22
 MAX_CENTER_OFFSET_Y = 0.22
@@ -96,14 +96,14 @@ def save_reference_portrait(image_data, student_id, full_name):
 
 def save_proof_snapshot(frame, student_id, student_name, subject_code, status="PRESENT"):
     """
-    Saves attendance capture using unified naming:
-    Local: captured_proofs/<Day>/<Date>/<SubjectCode>/<Date>_<Time>_<StudentID>_<StudentName>_<Status>.jpg
+    Saves attendance capture using unified 1:1 folder layout:
+      Local: captured_proofs/<Date>/<SubjectCode>/<Date>_<Time>_<StudentID>_<StudentName>_<Status>.jpg
+      SD:    /captured_proofs/<Date>/<SubjectCode>/<Date>_<Time>_<StudentID>_<StudentName>_<Status>.jpg
     Returns (local_rel_to_captured_proofs, sd_target_path)
     """
     if frame is None:
         return "", ""
     now = datetime.now()
-    day_slug = sanitize_slug(now.strftime("%A"), "Day")
     date_iso = now.strftime("%Y-%m-%d")
     time_slug = now.strftime("%I-%M-%S%p")
 
@@ -113,7 +113,7 @@ def save_proof_snapshot(frame, student_id, student_name, subject_code, status="P
     stat_slug = sanitize_slug(status or "PRESENT", "PRESENT")
 
     fname = f"{date_iso}_{time_slug}_{id_slug}_{stu_slug}_{stat_slug}.jpg"
-    rel_dir = os.path.join(day_slug, date_iso, subj_slug)
+    rel_dir = os.path.join(date_iso, subj_slug)
 
     abs_dir = os.path.join("captured_proofs", rel_dir)
     os.makedirs(abs_dir, exist_ok=True)
@@ -122,7 +122,7 @@ def save_proof_snapshot(frame, student_id, student_name, subject_code, status="P
     cv2.imwrite(abs_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
 
     local_rel = os.path.join(rel_dir, fname).replace("\\", "/")
-    sd_target = f"/{day_slug}/{subj_slug}/capture_log/{fname}"
+    sd_target = f"/captured_proofs/{date_iso}/{subj_slug}/{fname}"
     return local_rel, sd_target
 
 
