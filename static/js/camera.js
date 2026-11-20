@@ -300,8 +300,8 @@ async function startKioskStream() {
     btn.textContent = "Stop Scanner";
     btn.className =
       "bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold px-4 py-1.5 rounded-lg shadow-sm transition";
-    updateLcdBanner("NO_FACE", "ESP32-CAM Active — Ready to Scan");
-    scanInterval = setInterval(captureAndVerifyFrame, 650);
+    updateLcdBanner("NO_FACE", "ESP32-CAM Active — Center Face in Frame");
+    scanInterval = setInterval(captureAndVerifyFrame, 450);
     return;
   }
 
@@ -332,8 +332,8 @@ async function startKioskStream() {
     btn.textContent = "Stop Scanner";
     btn.className =
       "bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold px-4 py-1.5 rounded-lg shadow-sm transition";
-    updateLcdBanner("NO_FACE", "Ready to Scan");
-    scanInterval = setInterval(captureAndVerifyFrame, 550);
+    updateLcdBanner("NO_FACE", "Center Face in Frame");
+    scanInterval = setInterval(captureAndVerifyFrame, 450);
   } catch (err) {
     handleCameraError(err, "kiosk");
   }

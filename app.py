@@ -107,7 +107,7 @@ def sync_offline_capture():
 
     student, raw_frame = identify_offline_face(raw_bytes)
     if not student:
-        return jsonify({"status": "UNKNOWN", "student_name": "", "message": "No enrolled face matched"})
+        return jsonify({"status": "UNKNOWN", "student_name": "", "message": "No centered enrolled face matched"})
 
     subject_code, subject, att_status = get_active_schedule()
     if not subject:
@@ -406,6 +406,7 @@ def verify_frame():
         today_name = datetime.now().strftime("%A")
         return jsonify({
             "status": "NO_CLASS",
+            "student_id": verified_student["student_id"],
             "student_name": verified_student["full_name"],
             "message": f"No Active Class ({today_name})"
         })
@@ -425,6 +426,7 @@ def verify_frame():
         conn.close()
         return jsonify({
             "status": "ALREADY_LOGGED",
+            "student_id": verified_student["student_id"],
             "student_name": verified_student["full_name"],
             "subject_code": subject_code,
             "subject": subject,
@@ -442,6 +444,7 @@ def verify_frame():
 
     return jsonify({
         "status": "LOGGED",
+        "student_id": verified_student["student_id"],
         "student_name": verified_student["full_name"],
         "subject_code": subject_code,
         "subject": subject,
