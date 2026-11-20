@@ -46,10 +46,15 @@ WiFiServer streamServer(81);
 WiFiClient streamClient;
 
 bool sdAvailable = false;
-unsigned long lastCaptureMs = 0;
-unsigned long lastHeartbeatMs = 0;
-const unsigned long CAPTURE_INTERVAL_MS = 550;
-const unsigned long HEARTBEAT_INTERVAL_MS = 8000;
+bool serverReachable = false;
+unsigned long lastSyncMs = 0;
+unsigned long lastOfflineCheckMs = 0;
+unsigned long lastOfflineSaveMs = 0;
+
+const unsigned long SYNC_INTERVAL_MS = 3500;
+const unsigned long OFFLINE_CHECK_INTERVAL_MS = 1500;
+const unsigned long OFFLINE_SAVE_COOLDOWN_MS = 6000;
+const int MAX_OFFLINE_BUFFER_FILES = 25;
 
 uint8_t prevSample[64] = {0};
 size_t prevFrameLen = 0;
@@ -61,8 +66,8 @@ RTC_DATA_ATTR uint32_t bufferCounter = 1;
 struct TimeStamps {
   String dayName;    // Friday
   String dateIso;    // 2026-11-20
-  String timeFile;   // 06-40-00PM
-  String timeHuman;  // 06:40:00 PM
+  String timeFile;   // 07-10-00PM
+  String timeHuman;  // 07:10:00 PM
   bool validNtp;
 };
 
@@ -97,14 +102,15 @@ TimeStamps getCurrentTimestamps() {
   return ts;
 }
 
-String sanitizeSlug(const String& raw, const String& fallback) {
-  String clean = "";
-  for (size_t i = 0; i < raw.length(); i++) {
-    char c = raw[i];
-    if (isalnum(c) || c == '-' || c == '_') clean += c;
-    else if (c == ' ') clean += '_';
+void ensureParentDirs(const String& filePath) {
+  int slashIdx = 1;
+  while ((slashIdx = filePath.indexOf('/', slashIdx)) != -1) {
+    String subDir = filePath.substring(0, slashIdx);
+    if (subDir.length() > 0 && !SD_MMC.exists(subDir)) {
+      SD_MMC.mkdir(subDir);
+    }
+    slashIdx++;
   }
-  return clean.length() > 0 ? clean : fallback;
 }
 
 void ensureDir(const String& path) {
@@ -113,28 +119,30 @@ void ensureDir(const String& path) {
   }
 }
 
-String ensureCaptureLogDir(const String& dayName, const String& subjectCode) {
-  String daySlug = sanitizeSlug(dayName, "Day");
-  String subjSlug = sanitizeSlug(subjectCode, "General");
-
-  String dayDir = "/" + daySlug;
-  String subjDir = dayDir + "/" + subjSlug;
-  String logDir = subjDir + "/capture_log";
-
-  ensureDir(dayDir);
-  ensureDir(subjDir);
-  ensureDir(logDir);
-  return logDir;
+String urlEncodeParam(const String& str) {
+  String encoded = "";
+  const char* hex = "0123456789ABCDEF";
+  for (size_t i = 0; i < str.length(); i++) {
+    char c = str[i];
+    if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '/') {
+      encoded += c;
+    } else {
+      encoded += '%';
+      encoded += hex[(c >> 4) & 0x0F];
+      encoded += hex[c & 0x0F];
+    }
+  }
+  return encoded;
 }
 
 // ==========================================
-// 3. PRESENCE / MOTION GATE
+// 3. STRICT OFFLINE MOTION GATE (NO RANDOM SPAM)
 // ==========================================
-bool hasSignificantMotion(camera_fb_t* fb) {
-  if (!fb || fb->len < 1024) return false;
+bool hasSignificantOfflineMotion(camera_fb_t* fb) {
+  if (!fb || fb->len < 2048) return false;
 
   long lenDiff = abs((long)fb->len - (long)prevFrameLen);
-  bool sizeChanged = (prevFrameLen == 0) || (lenDiff > (long)(prevFrameLen * 0.08));
+  bool sizeChanged = (prevFrameLen > 0) && (lenDiff > (long)(prevFrameLen * 0.16));
 
   uint8_t currSample[64];
   size_t usable = fb->len > 512 ? fb->len - 512 : fb->len;
@@ -146,14 +154,16 @@ bool hasSignificantMotion(camera_fb_t* fb) {
     size_t idx = 256 + i * step;
     if (idx >= fb->len) idx = fb->len - 1;
     currSample[i] = fb->buf[idx];
-    if (abs((int)currSample[i] - (int)prevSample[i]) > 18) {
+    if (abs((int)currSample[i] - (int)prevSample[i]) > 28) {
       diffCount++;
     }
     prevSample[i] = currSample[i];
   }
+  bool firstRun = (prevFrameLen == 0);
   prevFrameLen = fb->len;
 
-  return sizeChanged || (diffCount >= 18);
+  if (firstRun) return false;
+  return sizeChanged && (diffCount >= 26);
 }
 
 // ==========================================
@@ -222,7 +232,6 @@ bool initCamera() {
 }
 
 bool initMicroSD() {
-  // 1-bit SD mode leaves GPIO 4 free; re-assert GPIO 4 LOW immediately after mount
   if (!SD_MMC.begin("/sdcard", true)) {
     keepFlashGroundedOff();
     Serial.println("[SD] Mount failed. Verify FAT32 format.");
@@ -234,70 +243,33 @@ bool initMicroSD() {
 
   ensureDir("/enrolled_faces");
   ensureDir("/offline_buffer");
-  Serial.println("[SD] Ready (/enrolled_faces & /<Day>/<SubjectCode>/capture_log).");
+  Serial.println("[SD] Ready (Two-way sync enabled).");
   return true;
 }
 
 // ==========================================
-// 5. STRUCTURED SD DATABASE STORAGE
+// 5. OFFLINE BUFFERING & AUTOMATIC CLEANUP
 // ==========================================
-String saveCapturePhotoAndLogToSd(
-  camera_fb_t* fb,
-  const String& studentId,
-  const String& studentName,
-  const String& subjectCode,
-  const String& status,
-  const TimeStamps& ts
-) {
-  if (!sdAvailable || !fb) return "";
+void clearAllOfflineBufferFiles() {
+  if (!sdAvailable) return;
+  File root = SD_MMC.open("/offline_buffer");
+  if (!root || !root.isDirectory()) return;
 
-  String logDir   = ensureCaptureLogDir(ts.dayName, subjectCode);
-  String dateSlug = sanitizeSlug(ts.dateIso, "0000-00-00");
-  String subjSlug = sanitizeSlug(subjectCode, "General");
-  String idSlug   = sanitizeSlug(studentId, "ID");
-  String stuSlug  = sanitizeSlug(studentName, "Student");
-  String statSlug = sanitizeSlug(status, "PRESENT");
-
-  // Optimized filename: <Date>_<Time>_<StudentID>_<StudentName>_<Status>.jpg
-  String photoFileName = dateSlug + "_" + ts.timeFile + "_" + idSlug + "_" + stuSlug + "_" + statSlug + ".jpg";
-  String photoFullPath = logDir + "/" + photoFileName;
-
-  File img = SD_MMC.open(photoFullPath, FILE_WRITE);
-  if (img) {
-    img.write(fb->buf, fb->len);
-    img.close();
-    Serial.printf("[SD-DB] Saved capture: %s\n", photoFullPath.c_str());
-  } else {
-    photoFullPath = "";
+  File f = root.openNextFile();
+  while (f) {
+    String p = String(f.path());
+    f.close();
+    SD_MMC.remove(p);
+    f = root.openNextFile();
   }
-
-  // Per-day, per-subject CSV capture log inside /<Day>/<SubjectCode>/capture_log/
-  String csvPath = logDir + "/" + dateSlug + "_attendance.csv";
-  bool isNew = !SD_MMC.exists(csvPath);
-
-  File csvFile = SD_MMC.open(csvPath, isNew ? FILE_WRITE : FILE_APPEND);
-  if (csvFile) {
-    if (isNew) {
-      csvFile.println("Student ID,Student Name,Subject Code,Status,Day,Date,Time,Capture File");
-    }
-    csvFile.printf("\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"\n",
-                   idSlug.c_str(),
-                   studentName.c_str(),
-                   subjSlug.c_str(),
-                   statSlug.c_str(),
-                   ts.dayName.c_str(),
-                   ts.dateIso.c_str(),
-                   ts.timeHuman.c_str(),
-                   photoFileName.c_str());
-    csvFile.close();
-  }
-
+  root.close();
   keepFlashGroundedOff();
-  return photoFullPath;
 }
 
-void bufferFrameSilentlyWhenOffline(camera_fb_t* fb, const TimeStamps& ts) {
+void bufferFrameOnlyWhenOffline(camera_fb_t* fb, const TimeStamps& ts) {
   if (!sdAvailable || !fb) return;
+  if (millis() - lastOfflineSaveMs < OFFLINE_SAVE_COOLDOWN_MS) return;
+
   File root = SD_MMC.open("/offline_buffer");
   int count = 0;
   if (root && root.isDirectory()) {
@@ -305,65 +277,20 @@ void bufferFrameSilentlyWhenOffline(camera_fb_t* fb, const TimeStamps& ts) {
     while (f) { count++; f.close(); f = root.openNextFile(); }
     root.close();
   }
-  if (count >= 60) return;
+  if (count >= MAX_OFFLINE_BUFFER_FILES) return;
 
   String fullPath = "/offline_buffer/BUF_" + ts.dateIso + "_" + ts.timeFile + ".jpg";
   File img = SD_MMC.open(fullPath, FILE_WRITE);
   if (img) {
     img.write(fb->buf, fb->len);
     img.close();
+    lastOfflineSaveMs = millis();
+    Serial.printf("[OFFLINE-BUF] Buffered frame: %s\n", fullPath.c_str());
   }
   keepFlashGroundedOff();
 }
 
-// ==========================================
-// 6. SERVER SYNC: HEARTBEAT, ENROLLED PORTRAITS & OFFLINE BUFFER
-// ==========================================
-void sendHeartbeatToServer() {
-  if (WiFi.status() != WL_CONNECTED) return;
-  HTTPClient http;
-  http.begin(String(SERVER_BASE) + "/api/esp32/register");
-  http.addHeader("Content-Type", "application/json");
-  http.setTimeout(2000);
-
-  String body = "{\"ip\":\"" + WiFi.localIP().toString() + "\"}";
-  http.POST(body);
-  http.end();
-}
-
-void syncEnrolledPortraitsFromServer() {
-  if (!sdAvailable || WiFi.status() != WL_CONNECTED) return;
-  HTTPClient http;
-  http.begin(String(SERVER_BASE) + "/api/esp32/enrolled_portraits");
-  http.setTimeout(3000);
-
-  if (http.GET() == 200) {
-    JsonDocument doc;
-    if (!deserializeJson(doc, http.getString())) {
-      JsonArray arr = doc["portraits"].as<JsonArray>();
-      for (JsonVariant v : arr) {
-        String fname = v.as<String>();
-        String sdPath = "/enrolled_faces/" + fname;
-        if (!SD_MMC.exists(sdPath)) {
-          HTTPClient dl;
-          dl.begin(String(SERVER_BASE) + "/api/esp32/portraits/" + fname);
-          if (dl.GET() == 200) {
-            File out = SD_MMC.open(sdPath, FILE_WRITE);
-            if (out) {
-              dl.writeToStream(&out);
-              out.close();
-            }
-          }
-          dl.end();
-        }
-      }
-    }
-  }
-  http.end();
-  keepFlashGroundedOff();
-}
-
-void syncOfflineBufferToServer() {
+void flushAndDeleteOfflineBufferToServer() {
   if (!sdAvailable || WiFi.status() != WL_CONNECTED) return;
   File root = SD_MMC.open("/offline_buffer");
   if (!root || !root.isDirectory()) return;
@@ -387,29 +314,17 @@ void syncOfflineBufferToServer() {
         http.setTimeout(3500);
 
         int code = http.POST(buf, fsize);
-        if (code == 200) {
-          JsonDocument doc;
-          if (!deserializeJson(doc, http.getString())) {
-            const char* status   = doc["status"] | "UNKNOWN";
-            const char* stuId    = doc["student_id"] | "ID";
-            const char* stuName  = doc["student_name"] | "";
-            const char* subjCode = doc["subject_code"] | "General";
-            const char* attStat  = doc["attendance_status"] | "PRESENT";
-            TimeStamps ts = getCurrentTimestamps();
-
-            if (strcmp(status, "LOGGED") == 0 && strlen(stuName) > 0) {
-              camera_fb_t fakeFb;
-              fakeFb.buf = buf;
-              fakeFb.len = fsize;
-              saveCapturePhotoAndLogToSd(&fakeFb, stuId, stuName, subjCode, attStat, ts);
-            }
-            SD_MMC.remove(entryPath);
-          }
-        }
         http.end();
         free(buf);
+
+        // Automatically delete processed offline buffer file once server responds
+        if (code == 200) {
+          SD_MMC.remove(entryPath);
+          Serial.printf("[OFFLINE-BUF] Synced & auto-deleted: %s\n", entryPath.c_str());
+        }
       } else {
         entry.close();
+        SD_MMC.remove(entryPath);
       }
     } else {
       entry.close();
@@ -418,6 +333,138 @@ void syncOfflineBufferToServer() {
   }
   root.close();
   keepFlashGroundedOff();
+}
+
+// ==========================================
+// 6. TWO-WAY LOCAL DB <-> MICROSD SYNCHRONIZATION
+// ==========================================
+void acknowledgeSyncTask(int taskId) {
+  HTTPClient ack;
+  ack.begin(String(SERVER_BASE) + "/api/esp32/sync_ack");
+  ack.addHeader("Content-Type", "application/json");
+  ack.setTimeout(2000);
+  ack.POST("{\"id\":" + String(taskId) + "}");
+  ack.end();
+}
+
+bool downloadFileFromServerToSd(const String& localRelPath, const String& sdPath) {
+  if (!sdAvailable) return false;
+  ensureParentDirs(sdPath);
+
+  HTTPClient dl;
+  String url = String(SERVER_BASE) + "/api/esp32/download_sync_file?path=" + urlEncodeParam(localRelPath);
+  dl.begin(url);
+  dl.setTimeout(4000);
+
+  int code = dl.GET();
+  if (code == 200) {
+    if (SD_MMC.exists(sdPath)) {
+      SD_MMC.remove(sdPath);
+    }
+    File out = SD_MMC.open(sdPath, FILE_WRITE);
+    if (out) {
+      dl.writeToStream(&out);
+      out.close();
+      dl.end();
+      keepFlashGroundedOff();
+      Serial.printf("[SD-SYNC] Wrote %s\n", sdPath.c_str());
+      return true;
+    }
+  } else if (code == 404) {
+    dl.end();
+    return true;
+  }
+  dl.end();
+  keepFlashGroundedOff();
+  return false;
+}
+
+void processPendingSdSyncTasks() {
+  if (!sdAvailable || WiFi.status() != WL_CONNECTED) return;
+
+  HTTPClient http;
+  http.begin(String(SERVER_BASE) + "/api/esp32/sync_tasks");
+  http.setTimeout(2500);
+
+  if (http.GET() == 200) {
+    JsonDocument doc;
+    if (!deserializeJson(doc, http.getString())) {
+      JsonArray tasks = doc["tasks"].as<JsonArray>();
+      for (JsonObject t : tasks) {
+        int taskId          = t["id"] | -1;
+        String action       = t["action"] | "";
+        String sdPath       = t["sd_path"] | "";
+        String localRelPath = t["local_rel_path"] | "";
+
+        if (taskId < 0 || sdPath.length() == 0) continue;
+
+        bool ok = false;
+        if (action == "DOWNLOAD_FILE") {
+          ok = downloadFileFromServerToSd(localRelPath, sdPath);
+        } else if (action == "DELETE_FILE") {
+          if (SD_MMC.exists(sdPath)) {
+            SD_MMC.remove(sdPath);
+            Serial.printf("[SD-SYNC] Deleted %s\n", sdPath.c_str());
+          }
+          ok = true;
+        }
+
+        if (ok) {
+          acknowledgeSyncTask(taskId);
+        }
+      }
+    }
+  }
+  http.end();
+  keepFlashGroundedOff();
+}
+
+void syncInitialEnrolledPortraits() {
+  if (!sdAvailable || WiFi.status() != WL_CONNECTED) return;
+  HTTPClient http;
+  http.begin(String(SERVER_BASE) + "/api/esp32/enrolled_portraits");
+  http.setTimeout(3000);
+
+  if (http.GET() == 200) {
+    JsonDocument doc;
+    if (!deserializeJson(doc, http.getString())) {
+      JsonArray arr = doc["portraits"].as<JsonArray>();
+      for (JsonVariant v : arr) {
+        String fname = v.as<String>();
+        String sdPath = "/enrolled_faces/" + fname;
+        if (!SD_MMC.exists(sdPath)) {
+          downloadFileFromServerToSd("enrolled_faces/" + fname, sdPath);
+        }
+      }
+    }
+  }
+  http.end();
+  keepFlashGroundedOff();
+}
+
+bool sendHeartbeatToServer() {
+  if (WiFi.status() != WL_CONNECTED) {
+    serverReachable = false;
+    return false;
+  }
+
+  HTTPClient http;
+  http.begin(String(SERVER_BASE) + "/api/esp32/register");
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(2000);
+
+  String body = "{\"ip\":\"" + WiFi.localIP().toString() + "\"}";
+  int code = http.POST(body);
+  http.end();
+
+  bool wasOffline = !serverReachable;
+  serverReachable = (code == 200);
+
+  if (serverReachable && wasOffline) {
+    flushAndDeleteOfflineBufferToServer();
+    syncInitialEnrolledPortraits();
+  }
+  return serverReachable;
 }
 
 // ==========================================
@@ -464,7 +511,7 @@ void setup() {
   keepFlashGroundedOff();
   Serial.begin(115200);
   delay(200);
-  Serial.println("\n=== CPE-3B ESP32-CAM v2 Node ===");
+  Serial.println("\n=== CPE-3B ESP32-CAM v2 Two-Way Sync Node ===");
 
   pinMode(ONBOARD_LED_PIN, OUTPUT);
   digitalWrite(ONBOARD_LED_PIN, HIGH);
@@ -497,11 +544,13 @@ void setup() {
     camHttpServer.begin();
     streamServer.begin();
 
-    sendHeartbeatToServer();
-    syncEnrolledPortraitsFromServer();
-    syncOfflineBufferToServer();
+    if (sendHeartbeatToServer()) {
+      flushAndDeleteOfflineBufferToServer();
+      syncInitialEnrolledPortraits();
+      processPendingSdSyncTasks();
+    }
   } else {
-    Serial.println("\n[WIFI] Offline — buffering frames until reconnect");
+    Serial.println("\n[WIFI] Offline — standing by");
   }
   keepFlashGroundedOff();
 }
@@ -512,68 +561,26 @@ void loop() {
     serviceMjpegStream();
     yield();
 
-    if (millis() - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
-      lastHeartbeatMs = millis();
-      sendHeartbeatToServer();
-    }
-  }
-
-  if (millis() - lastCaptureMs < CAPTURE_INTERVAL_MS) return;
-  lastCaptureMs = millis();
-
-  camera_fb_t* fb = esp_camera_fb_get();
-  if (!fb) return;
-
-  if (!hasSignificantMotion(fb)) {
-    esp_camera_fb_return(fb);
-    return;
-  }
-
-  TimeStamps ts = getCurrentTimestamps();
-
-  if (WiFi.status() != WL_CONNECTED) {
-    bufferFrameSilentlyWhenOffline(fb, ts);
-    esp_camera_fb_return(fb);
-    return;
-  }
-
-  HTTPClient http;
-  http.begin(String(SERVER_BASE) + "/api/verify_frame");
-  http.addHeader("Content-Type", "image/jpeg");
-  http.addHeader("X-Camera-Source", "esp32");
-  http.setTimeout(2500);
-
-  int httpCode = http.POST(fb->buf, fb->len);
-  if (httpCode == 200) {
-    JsonDocument doc;
-    if (!deserializeJson(doc, http.getString())) {
-      const char* status   = doc["status"]  | "UNKNOWN";
-      const char* message  = doc["message"] | "";
-      const char* stuId    = doc["student_id"] | "ID";
-      const char* stuName  = doc["student_name"] | "";
-      const char* subjCode = doc["subject_code"] | "General";
-      const char* attStat  = doc["attendance_status"] | "PRESENT";
-
-      Serial.printf("[%s] %s\n", status, message);
-
-      if ((strcmp(status, "LOGGED") == 0 || strcmp(status, "ALREADY_LOGGED") == 0) && strlen(stuName) > 0) {
-        if (strcmp(status, "LOGGED") == 0) {
-          saveCapturePhotoAndLogToSd(fb, stuId, stuName, subjCode, attStat, ts);
-
-          for (int i = 0; i < 2; i++) {
-            digitalWrite(ONBOARD_LED_PIN, LOW);
-            delay(80);
-            digitalWrite(ONBOARD_LED_PIN, HIGH);
-            delay(80);
-          }
-        }
-        delay(1200);
+    if (millis() - lastSyncMs >= SYNC_INTERVAL_MS) {
+      lastSyncMs = millis();
+      if (sendHeartbeatToServer()) {
+        processPendingSdSyncTasks();
       }
     }
   } else {
-    bufferFrameSilentlyWhenOffline(fb, ts);
+    serverReachable = false;
   }
 
-  http.end();
-  esp_camera_fb_return(fb);
+  // Only buffer frames to /offline_buffer when Wi-Fi or the Flask server is unreachable
+  if (!serverReachable && (millis() - lastOfflineCheckMs >= OFFLINE_CHECK_INTERVAL_MS)) {
+    lastOfflineCheckMs = millis();
+    camera_fb_t* fb = esp_camera_fb_get();
+    if (fb) {
+      if (hasSignificantOfflineMotion(fb)) {
+        TimeStamps ts = getCurrentTimestamps();
+        bufferFrameOnlyWhenOffline(fb, ts);
+      }
+      esp_camera_fb_return(fb);
+    }
+  }
 }
