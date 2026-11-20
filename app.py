@@ -7,13 +7,15 @@ import urllib.request
 from datetime import datetime
 
 import numpy as np
-from flask import Flask, Response, jsonify, render_template, request, send_from_directory
+from flask import Flask, Response, jsonify, render_template, request, send_file, send_from_directory
 
 from database import (
     auto_mark_ended_classes,
     get_active_schedule,
     get_db,
     init_db,
+    queue_sd_sync,
+    sync_daily_csv_both_ends,
     validate_schedule_input,
 )
 from face_engine import (
@@ -53,6 +55,17 @@ def resolve_student_photo_url(student_id):
     return ""
 
 
+def proof_rel_to_sd_path(proof_rel):
+    """Maps local captured_proofs/<Day>/<Date>/<Subj>/<File>.jpg -> /<Day>/<Subj>/capture_log/<File>.jpg"""
+    if not proof_rel:
+        return ""
+    parts = proof_rel.replace("\\", "/").split("/")
+    if len(parts) >= 4:
+        day_slug, _, subj_slug, fname = parts[0], parts[1], parts[2], parts[3]
+        return f"/{day_slug}/{subj_slug}/capture_log/{fname}"
+    return ""
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -63,14 +76,24 @@ def serve_proof_image(filename):
     return send_from_directory("captured_proofs", filename)
 
 
-# --- ESP32-CAM DEVICE ENDPOINTS ---
+# --- ESP32-CAM DEVICE & TWO-WAY SD SYNC ENDPOINTS ---
 @app.route("/api/esp32/register", methods=["POST"])
 def register_esp32():
     data = request.json or {}
     ip_addr = data.get("ip") or request.remote_addr
     esp32_node["ip"] = ip_addr
     esp32_node["last_seen"] = time.time()
-    return jsonify({"success": True, "ip": ip_addr, "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+
+    conn = get_db()
+    pending_count = conn.execute("SELECT COUNT(*) FROM sd_sync_queue").fetchone()[0]
+    conn.close()
+
+    return jsonify({
+        "success": True,
+        "ip": ip_addr,
+        "pending_sync": pending_count,
+        "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
 
 
 @app.route("/api/esp32/proxy_capture", methods=["GET"])
@@ -100,14 +123,83 @@ def download_portrait(filename):
     return send_from_directory("enrolled_faces", filename)
 
 
+@app.route("/api/esp32/sync_tasks", methods=["GET"])
+def get_esp32_sync_tasks():
+    """Returns pending local->SD file creations, renames, deletions, and daily CSV updates."""
+    esp32_node["last_seen"] = time.time()
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT id, action, sd_path, local_rel_path
+        FROM sd_sync_queue
+        ORDER BY id ASC
+        LIMIT 12
+    """).fetchall()
+    conn.close()
+
+    tasks = []
+    for r in rows:
+        if r["action"] == "DOWNLOAD_FILE":
+            abs_local = os.path.abspath(r["local_rel_path"])
+            if not os.path.exists(abs_local):
+                # Drop stale download task if local file no longer exists
+                c2 = get_db()
+                c2.execute("DELETE FROM sd_sync_queue WHERE id = ?", (r["id"],))
+                c2.commit()
+                c2.close()
+                continue
+        tasks.append({
+            "id": r["id"],
+            "action": r["action"],
+            "sd_path": r["sd_path"],
+            "local_rel_path": r["local_rel_path"],
+        })
+
+    return jsonify({"tasks": tasks})
+
+
+@app.route("/api/esp32/download_sync_file", methods=["GET"])
+def download_sync_file():
+    """Streams any queued portrait, capture photo, or daily CSV to the ESP32-CAM."""
+    esp32_node["last_seen"] = time.time()
+    rel_path = request.args.get("path", "").strip().lstrip("/\\")
+    if not rel_path:
+        return jsonify({"error": "Missing path"}), 400
+
+    allowed_roots = (os.path.abspath("enrolled_faces"), os.path.abspath("captured_proofs"))
+    abs_target = os.path.abspath(rel_path)
+    if not any(abs_target.startswith(root + os.sep) for root in allowed_roots):
+        return jsonify({"error": "Access denied"}), 403
+
+    if not os.path.exists(abs_target):
+        return jsonify({"error": "File not found"}), 404
+
+    return send_file(abs_target)
+
+
+@app.route("/api/esp32/sync_ack", methods=["POST"])
+def ack_esp32_sync_task():
+    """Acknowledges completed SD card file operations and removes them from the queue."""
+    esp32_node["last_seen"] = time.time()
+    data = request.json or {}
+    task_id = data.get("id")
+    if task_id is not None:
+        conn = get_db()
+        conn.execute("DELETE FROM sd_sync_queue WHERE id = ?", (task_id,))
+        conn.commit()
+        conn.close()
+    return jsonify({"success": True})
+
+
 @app.route("/api/esp32/sync_offline", methods=["POST"])
 def sync_offline_capture():
+    """Processes buffered offline captures from ESP32-CAM and updates both local DB & SD card."""
     esp32_node["last_seen"] = time.time()
     raw_bytes = request.data
 
     student, raw_frame = identify_offline_face(raw_bytes)
     if not student:
-        return jsonify({"status": "UNKNOWN", "student_name": "", "message": "No centered enrolled face matched"})
+        # Return 200 IGNORED so ESP32-CAM deletes unneeded non-matching buffer frames immediately
+        return jsonify({"status": "IGNORED", "student_name": "", "message": "No centered enrolled face matched"})
 
     subject_code, subject, att_status = get_active_schedule()
     if not subject:
@@ -118,14 +210,41 @@ def sync_offline_capture():
     now_dt = datetime.now()
     date_str = now_dt.strftime("%Y-%m-%d")
     time_str = now_dt.strftime("%I:%M:%S %p")
-    proof_rel = save_proof_snapshot(raw_frame, student["full_name"], subject_code)
 
     conn = get_db()
+    existing = conn.execute(
+        "SELECT id FROM attendance_logs WHERE student_id = ? AND subject = ? AND date_str = ?",
+        (student["student_id"], subject, date_str),
+    ).fetchone()
+
+    if existing:
+        conn.close()
+        return jsonify({
+            "status": "ALREADY_LOGGED",
+            "student_id": student["student_id"],
+            "student_name": student["full_name"],
+            "subject_code": subject_code,
+            "attendance_status": att_status,
+            "message": "Already logged today",
+        })
+
+    proof_rel, sd_target = save_proof_snapshot(
+        raw_frame,
+        student["student_id"],
+        student["full_name"],
+        subject_code,
+        status=att_status,
+    )
+
     try:
         conn.execute("""
             INSERT INTO attendance_logs (student_id, full_name, subject_code, subject, status, date_str, time_str, proof_image)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (student["student_id"], student["full_name"], subject_code or "", subject, att_status, date_str, time_str, proof_rel))
+
+        if proof_rel and sd_target:
+            queue_sd_sync(conn, "DOWNLOAD_FILE", sd_target, local_rel_path=f"captured_proofs/{proof_rel}")
+        sync_daily_csv_both_ends(conn, date_str, subject_code=subject_code, subject_name=subject)
         conn.commit()
     except sqlite3.IntegrityError:
         pass
@@ -212,13 +331,22 @@ def enroll_student():
     safe_id = "".join(c for c in student_id if c.isalnum() or c in ("-", "_"))
     emb_filename = f"{safe_id}.npy"
     np.save(os.path.join("enrolled_faces", emb_filename), feature)
-    save_reference_portrait(image_data, student_id, full_name)
+    portrait_fname = save_reference_portrait(image_data, student_id, full_name)
 
     conn = get_db()
     conn.execute("""
         INSERT INTO students (student_id, full_name, section, embedding_file, created_at)
         VALUES (?, ?, ?, ?, ?)
     """, (student_id, full_name, section, emb_filename, datetime.now().strftime("%Y-%m-%d %I:%M %p")))
+
+    if portrait_fname:
+        queue_sd_sync(
+            conn,
+            "DOWNLOAD_FILE",
+            f"/enrolled_faces/{portrait_fname}",
+            local_rel_path=f"enrolled_faces/{portrait_fname}",
+        )
+
     conn.commit()
     conn.close()
 
@@ -253,6 +381,7 @@ def update_student(original_id):
 
     emb_filename = current_row["embedding_file"]
     old_emb_path = os.path.join("enrolled_faces", emb_filename)
+    old_safe_id = sanitize_slug(original_id)
 
     if image_data:
         feature, err = extract_face_feature(image_data, exclude_student_id=original_id, source=camera_source)
@@ -267,11 +396,19 @@ def update_student(original_id):
             os.remove(old_emb_path)
         np.save(new_emb_path, feature)
 
-        old_safe_id = sanitize_slug(original_id)
         for fname in os.listdir("enrolled_faces"):
             if fname.startswith(f"{old_safe_id}_") and fname.endswith(".jpg"):
                 os.remove(os.path.join("enrolled_faces", fname))
-        save_reference_portrait(image_data, new_id, full_name)
+                queue_sd_sync(conn, "DELETE_FILE", f"/enrolled_faces/{fname}")
+
+        portrait_fname = save_reference_portrait(image_data, new_id, full_name)
+        if portrait_fname:
+            queue_sd_sync(
+                conn,
+                "DOWNLOAD_FILE",
+                f"/enrolled_faces/{portrait_fname}",
+                local_rel_path=f"enrolled_faces/{portrait_fname}",
+            )
     elif new_id != original_id or full_name != current_row["full_name"]:
         safe_id = "".join(c for c in new_id if c.isalnum() or c in ("-", "_"))
         emb_filename = f"{safe_id}.npy"
@@ -279,13 +416,23 @@ def update_student(original_id):
         if os.path.exists(old_emb_path) and old_emb_path != new_emb_path:
             os.rename(old_emb_path, new_emb_path)
 
-        old_safe_id = sanitize_slug(original_id)
+        new_safe_id = sanitize_slug(new_id)
         new_safe_name = sanitize_slug(full_name)
+        new_portrait_fname = f"{new_safe_id}_{new_safe_name}.jpg"
+
         for fname in os.listdir("enrolled_faces"):
             if fname.startswith(f"{old_safe_id}_") and fname.endswith(".jpg"):
                 os.rename(
                     os.path.join("enrolled_faces", fname),
-                    os.path.join("enrolled_faces", f"{safe_id}_{new_safe_name}.jpg"),
+                    os.path.join("enrolled_faces", new_portrait_fname),
+                )
+                if fname != new_portrait_fname:
+                    queue_sd_sync(conn, "DELETE_FILE", f"/enrolled_faces/{fname}")
+                queue_sd_sync(
+                    conn,
+                    "DOWNLOAD_FILE",
+                    f"/enrolled_faces/{new_portrait_fname}",
+                    local_rel_path=f"enrolled_faces/{new_portrait_fname}",
                 )
 
     conn.execute("""
@@ -294,7 +441,45 @@ def update_student(original_id):
         WHERE student_id = ?
     """, (new_id, full_name, section, emb_filename, original_id))
 
+    # Rename existing capture filenames on both local disk and SD card if student ID or name changed
+    affected_logs = conn.execute(
+        "SELECT id, subject_code, subject, date_str, proof_image FROM attendance_logs WHERE student_id = ?",
+        (original_id,),
+    ).fetchall()
+
+    affected_csvs = set()
+    for log_row in affected_logs:
+        affected_csvs.add((log_row["date_str"], log_row["subject_code"], log_row["subject"]))
+        old_proof = log_row["proof_image"]
+        if old_proof:
+            parts = old_proof.replace("\\", "/").split("/")
+            if len(parts) >= 4:
+                day_slug, date_slug, subj_slug, old_fname = parts[0], parts[1], parts[2], parts[3]
+                f_parts = old_fname.rsplit(".", 1)[0].split("_")
+                if len(f_parts) >= 5:
+                    date_part, time_part, status_part = f_parts[0], f_parts[1], f_parts[-1]
+                    new_fname = f"{date_part}_{time_part}_{sanitize_slug(new_id)}_{sanitize_slug(full_name)}_{status_part}.jpg"
+                    if new_fname != old_fname:
+                        old_abs = os.path.join("captured_proofs", day_slug, date_slug, subj_slug, old_fname)
+                        new_abs = os.path.join("captured_proofs", day_slug, date_slug, subj_slug, new_fname)
+                        if os.path.exists(old_abs):
+                            os.rename(old_abs, new_abs)
+                        new_proof_rel = f"{day_slug}/{date_slug}/{subj_slug}/{new_fname}"
+                        conn.execute("UPDATE attendance_logs SET proof_image = ? WHERE id = ?", (new_proof_rel, log_row["id"]))
+
+                        queue_sd_sync(conn, "DELETE_FILE", f"/{day_slug}/{subj_slug}/capture_log/{old_fname}")
+                        queue_sd_sync(
+                            conn,
+                            "DOWNLOAD_FILE",
+                            f"/{day_slug}/{subj_slug}/capture_log/{new_fname}",
+                            local_rel_path=f"captured_proofs/{new_proof_rel}",
+                        )
+
     conn.execute("UPDATE attendance_logs SET student_id = ?, full_name = ? WHERE student_id = ?", (new_id, full_name, original_id))
+
+    for d_str, s_code, s_name in affected_csvs:
+        sync_daily_csv_both_ends(conn, d_str, subject_code=s_code, subject_name=s_name)
+
     conn.commit()
     conn.close()
     return jsonify({"success": True, "message": f"Updated {full_name} ({new_id})."})
@@ -312,6 +497,7 @@ def delete_student(student_id):
         for fname in os.listdir("enrolled_faces"):
             if fname.startswith(f"{safe_id}_") and fname.endswith(".jpg"):
                 os.remove(os.path.join("enrolled_faces", fname))
+                queue_sd_sync(conn, "DELETE_FILE", f"/enrolled_faces/{fname}")
         conn.execute("DELETE FROM students WHERE student_id = ?", (student_id,))
         conn.commit()
     conn.close()
@@ -368,7 +554,14 @@ def update_schedule(sched_id):
         WHERE id = ?
     """, (day_of_week, subject_code, subject, start_time, end_time, sched_id))
 
+    affected_dates = [
+        r["date_str"]
+        for r in conn.execute("SELECT DISTINCT date_str FROM attendance_logs WHERE subject = ?", (existing["subject"],)).fetchall()
+    ]
     conn.execute("UPDATE attendance_logs SET subject_code = ?, subject = ? WHERE subject = ?", (subject_code, subject, existing["subject"]))
+    for d_str in affected_dates:
+        sync_daily_csv_both_ends(conn, d_str, subject_code=subject_code, subject_name=subject)
+
     conn.commit()
     conn.close()
     return jsonify({"success": True, "message": f"Updated {subject_code} ({day_of_week})."})
@@ -434,11 +627,23 @@ def verify_frame():
             "message": f"{verified_student['full_name']} • Already Logged ({display_subj})"
         })
 
-    proof_rel = save_proof_snapshot(raw_frame, verified_student["full_name"], subject_code)
+    proof_rel, sd_target = save_proof_snapshot(
+        raw_frame,
+        verified_student["student_id"],
+        verified_student["full_name"],
+        subject_code,
+        status=att_status,
+    )
     conn.execute("""
         INSERT INTO attendance_logs (student_id, full_name, subject_code, subject, status, date_str, time_str, proof_image)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (verified_student["student_id"], verified_student["full_name"], subject_code or "", subject, att_status, date_str, time_str, proof_rel))
+
+    # Mirror both the capture photo and the updated daily CSV to the ESP32-CAM MicroSD
+    if proof_rel and sd_target:
+        queue_sd_sync(conn, "DOWNLOAD_FILE", sd_target, local_rel_path=f"captured_proofs/{proof_rel}")
+    sync_daily_csv_both_ends(conn, date_str, subject_code=subject_code, subject_name=subject)
+
     conn.commit()
     conn.close()
 
@@ -456,13 +661,19 @@ def verify_frame():
 @app.route("/api/logs/<int:log_id>", methods=["DELETE"])
 def delete_single_log(log_id):
     conn = get_db()
-    row = conn.execute("SELECT proof_image FROM attendance_logs WHERE id = ?", (log_id,)).fetchone()
-    if row and row["proof_image"]:
-        proof_path = os.path.join("captured_proofs", row["proof_image"])
-        if os.path.exists(proof_path):
-            os.remove(proof_path)
-    conn.execute("DELETE FROM attendance_logs WHERE id = ?", (log_id,))
-    conn.commit()
+    row = conn.execute("SELECT date_str, subject_code, subject, proof_image FROM attendance_logs WHERE id = ?", (log_id,)).fetchone()
+    if row:
+        if row["proof_image"]:
+            proof_path = os.path.join("captured_proofs", row["proof_image"])
+            if os.path.exists(proof_path):
+                os.remove(proof_path)
+            sd_target = proof_rel_to_sd_path(row["proof_image"])
+            if sd_target:
+                queue_sd_sync(conn, "DELETE_FILE", sd_target)
+
+        conn.execute("DELETE FROM attendance_logs WHERE id = ?", (log_id,))
+        sync_daily_csv_both_ends(conn, row["date_str"], subject_code=row["subject_code"], subject_name=row["subject"])
+        conn.commit()
     conn.close()
     return jsonify({"success": True})
 
@@ -470,10 +681,26 @@ def delete_single_log(log_id):
 @app.route("/api/logs/clear", methods=["DELETE"])
 def clear_logs():
     conn = get_db()
+    rows = conn.execute("SELECT date_str, subject_code, subject, proof_image FROM attendance_logs").fetchall()
+    affected_csvs = set()
+
+    for row in rows:
+        affected_csvs.add((row["date_str"], row["subject_code"], row["subject"]))
+        if row["proof_image"]:
+            proof_path = os.path.join("captured_proofs", row["proof_image"])
+            if os.path.exists(proof_path):
+                os.remove(proof_path)
+            sd_target = proof_rel_to_sd_path(row["proof_image"])
+            if sd_target:
+                queue_sd_sync(conn, "DELETE_FILE", sd_target)
+
     conn.execute("DELETE FROM attendance_logs")
+    for d_str, s_code, s_name in affected_csvs:
+        sync_daily_csv_both_ends(conn, d_str, subject_code=s_code, subject_name=s_name)
+
     conn.commit()
     conn.close()
-    return jsonify({"success": True, "message": "All attendance logs cleared."})
+    return jsonify({"success": True, "message": "All attendance logs cleared and synced."})
 
 
 @app.route("/api/export_csv", methods=["GET"])
