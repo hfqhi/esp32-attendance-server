@@ -1,7 +1,11 @@
+import csv
+import os
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 
 DB_PATH = "attendance.db"
+
+VALID_DAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
 
 def get_db():
@@ -10,11 +14,17 @@ def get_db():
     return conn
 
 
+def sanitize_db_slug(text, fallback="General"):
+    clean = "_".join(str(text).strip().split())
+    clean = "".join(c for c in clean if c.isalnum() or c in ("-", "_"))
+    return clean or fallback
+
+
 def init_db():
     conn = get_db()
-    cur = conn.cursor()
+    cursor = conn.cursor()
 
-    cur.execute("""
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS students (
             student_id TEXT PRIMARY KEY,
             full_name TEXT NOT NULL,
@@ -24,7 +34,7 @@ def init_db():
         )
     """)
 
-    cur.execute("""
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS schedules (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             day_of_week TEXT NOT NULL DEFAULT 'Monday',
@@ -35,146 +45,208 @@ def init_db():
         )
     """)
 
-    cur.execute("""
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS attendance_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             student_id TEXT NOT NULL,
             full_name TEXT NOT NULL,
-            subject_code TEXT DEFAULT '',
+            subject_code TEXT NOT NULL DEFAULT '',
             subject TEXT NOT NULL,
             status TEXT NOT NULL,
             date_str TEXT NOT NULL,
             time_str TEXT NOT NULL,
-            proof_image TEXT DEFAULT '',
+            proof_image TEXT NOT NULL DEFAULT '',
             UNIQUE(student_id, subject, date_str)
         )
     """)
 
-    sched_cols = [r["name"] for r in cur.execute("PRAGMA table_info(schedules)").fetchall()]
-    if "day_of_week" not in sched_cols:
-        cur.execute("ALTER TABLE schedules ADD COLUMN day_of_week TEXT NOT NULL DEFAULT 'Monday'")
-    if "subject_code" not in sched_cols:
-        cur.execute("ALTER TABLE schedules ADD COLUMN subject_code TEXT NOT NULL DEFAULT ''")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sd_sync_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action TEXT NOT NULL,
+            sd_path TEXT NOT NULL,
+            local_rel_path TEXT NOT NULL DEFAULT '',
+            payload TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+    """)
 
-    log_cols = [r["name"] for r in cur.execute("PRAGMA table_info(attendance_logs)").fetchall()]
+    # Lightweight schema migration for existing DBs
+    sched_cols = [r["name"] for r in cursor.execute("PRAGMA table_info(schedules)").fetchall()]
+    if "day_of_week" not in sched_cols:
+        cursor.execute("ALTER TABLE schedules ADD COLUMN day_of_week TEXT NOT NULL DEFAULT 'Monday'")
+    if "subject_code" not in sched_cols:
+        cursor.execute("ALTER TABLE schedules ADD COLUMN subject_code TEXT NOT NULL DEFAULT ''")
+
+    log_cols = [r["name"] for r in cursor.execute("PRAGMA table_info(attendance_logs)").fetchall()]
     if "subject_code" not in log_cols:
-        cur.execute("ALTER TABLE attendance_logs ADD COLUMN subject_code TEXT DEFAULT ''")
+        cursor.execute("ALTER TABLE attendance_logs ADD COLUMN subject_code TEXT NOT NULL DEFAULT ''")
     if "proof_image" not in log_cols:
-        cur.execute("ALTER TABLE attendance_logs ADD COLUMN proof_image TEXT DEFAULT ''")
+        cursor.execute("ALTER TABLE attendance_logs ADD COLUMN proof_image TEXT NOT NULL DEFAULT ''")
 
     conn.commit()
     conn.close()
 
 
+def queue_sd_sync(conn, action, sd_path, local_rel_path="", payload=""):
+    """Queues an incremental sync instruction for the ESP32-CAM MicroSD database."""
+    # Deduplicate identical pending tasks for the same target SD path
+    conn.execute("DELETE FROM sd_sync_queue WHERE sd_path = ? AND action = ?", (sd_path, action))
+    if action == "DELETE_FILE":
+        conn.execute("DELETE FROM sd_sync_queue WHERE sd_path = ? AND action = 'DOWNLOAD_FILE'", (sd_path,))
+    elif action == "DOWNLOAD_FILE":
+        conn.execute("DELETE FROM sd_sync_queue WHERE sd_path = ? AND action = 'DELETE_FILE'", (sd_path,))
+
+    conn.execute("""
+        INSERT INTO sd_sync_queue (action, sd_path, local_rel_path, payload, created_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (action, sd_path, local_rel_path, payload, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+
+
+def sync_daily_csv_both_ends(conn, date_str, subject_code="", subject_name=""):
+    """Regenerates the local daily CSV and queues the identical CSV for the ESP32-CAM SD card."""
+    try:
+        dt_obj = datetime.strptime(date_str, "%Y-%m-%d")
+        day_name = dt_obj.strftime("%A")
+    except ValueError:
+        day_name = datetime.now().strftime("%A")
+
+    subj_slug = sanitize_db_slug(subject_code or subject_name or "General")
+    day_slug = sanitize_db_slug(day_name, "Day")
+    date_slug = sanitize_db_slug(date_str, "0000-00-00")
+
+    query = "SELECT student_id, full_name, subject_code, subject, status, date_str, time_str, proof_image FROM attendance_logs WHERE date_str = ?"
+    params = [date_str]
+    if subject_code:
+        query += " AND subject_code = ?"
+        params.append(subject_code)
+    elif subject_name:
+        query += " AND subject = ?"
+        params.append(subject_name)
+    query += " ORDER BY id ASC"
+
+    rows = conn.execute(query, params).fetchall()
+
+    local_dir = os.path.join("captured_proofs", day_slug, date_slug, subj_slug)
+    os.makedirs(local_dir, exist_ok=True)
+    local_csv_path = os.path.join(local_dir, f"{date_slug}_attendance.csv")
+    sd_csv_path = f"/{day_slug}/{subj_slug}/capture_log/{date_slug}_attendance.csv"
+
+    if not rows:
+        if os.path.exists(local_csv_path):
+            os.remove(local_csv_path)
+        queue_sd_sync(conn, "DELETE_FILE", sd_csv_path)
+        return
+
+    with open(local_csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Student ID", "Student Name", "Subject Code", "Subject Name", "Status", "Day", "Date", "Time", "Capture File"])
+        for r in rows:
+            capture_fname = os.path.basename(r["proof_image"]) if r["proof_image"] else ""
+            writer.writerow([
+                r["student_id"],
+                r["full_name"],
+                r["subject_code"] or subj_slug,
+                r["subject"],
+                r["status"],
+                day_name,
+                r["date_str"],
+                r["time_str"],
+                capture_fname,
+            ])
+
+    local_rel = os.path.join("captured_proofs", day_slug, date_slug, subj_slug, f"{date_slug}_attendance.csv").replace("\\", "/")
+    queue_sd_sync(conn, "DOWNLOAD_FILE", sd_csv_path, local_rel_path=local_rel)
+
+
+def time_to_minutes(t_str):
+    h, m = map(int, t_str.split(":"))
+    return h * 60 + m
+
+
 def validate_schedule_input(conn, day_of_week, subject_code, subject, start_time, end_time, exclude_id=None):
-    valid_days = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"}
-    if day_of_week not in valid_days:
-        return "Select a valid day of the week."
+    if day_of_week not in VALID_DAYS:
+        return "Please select a valid day of the week."
     if not subject_code or not subject or not start_time or not end_time:
-        return "Day, subject code, subject name, start time, and end time are required."
-    if start_time >= end_time:
-        return "End time must be later than start time."
+        return "Day, Subject Code, Subject Name, Start Time, and End Time are required."
 
+    new_start = time_to_minutes(start_time)
+    new_end = time_to_minutes(end_time)
+    if new_end <= new_start:
+        return "End Time must be later than Start Time."
+
+    query = "SELECT id, subject_code, subject, start_time, end_time FROM schedules WHERE day_of_week = ?"
+    params = [day_of_week]
     if exclude_id is not None:
-        dup = conn.execute("""
-            SELECT 1 FROM schedules
-            WHERE day_of_week = ? AND (LOWER(subject_code) = LOWER(?) OR LOWER(subject) = LOWER(?)) AND id != ?
-        """, (day_of_week, subject_code, subject, exclude_id)).fetchone()
-        existing = conn.execute(
-            "SELECT * FROM schedules WHERE day_of_week = ? AND id != ?", (day_of_week, exclude_id)
-        ).fetchall()
-    else:
-        dup = conn.execute("""
-            SELECT 1 FROM schedules
-            WHERE day_of_week = ? AND (LOWER(subject_code) = LOWER(?) OR LOWER(subject) = LOWER(?))
-        """, (day_of_week, subject_code, subject)).fetchone()
-        existing = conn.execute(
-            "SELECT * FROM schedules WHERE day_of_week = ?", (day_of_week,)
-        ).fetchall()
+        query += " AND id != ?"
+        params.append(exclude_id)
 
-    if dup:
-        return f"'{subject_code} — {subject}' already exists on {day_of_week}."
+    for row in conn.execute(query, params).fetchall():
+        if row["subject_code"].strip().lower() == subject_code.lower() and row["start_time"] == start_time:
+            return f"Duplicate schedule: {subject_code} on {day_of_week} at {start_time} already exists."
 
-    for row in existing:
-        if start_time < row["end_time"] and end_time > row["start_time"]:
-            code_label = f"{row['subject_code']} ({row['subject']})" if row["subject_code"] else row["subject"]
-            return f"Time conflict on {day_of_week} with {code_label} ({row['start_time']} - {row['end_time']})."
+        ex_start = time_to_minutes(row["start_time"])
+        ex_end = time_to_minutes(row["end_time"])
+        if new_start < ex_end and new_end > ex_start:
+            label = f"{row['subject_code']} ({row['subject']})" if row["subject_code"] else row["subject"]
+            return f"Time overlap on {day_of_week} with {label} ({row['start_time']} - {row['end_time']})."
 
     return None
 
 
-def get_active_schedule(override_subject=None):
-    conn = get_db()
-    today_day = datetime.now().strftime("%A")
-
-    if override_subject:
-        row = conn.execute(
-            "SELECT * FROM schedules WHERE subject = ? AND day_of_week = ?",
-            (override_subject, today_day),
-        ).fetchone()
-        if not row:
-            row = conn.execute("SELECT * FROM schedules WHERE subject = ?", (override_subject,)).fetchone()
-        conn.close()
-        if row:
-            return row["subject_code"], row["subject"], "PRESENT"
-        return "", override_subject, "PRESENT"
-
+def get_active_schedule():
+    """Returns (subject_code, subject_name, status) if current day & time falls within a scheduled class."""
     now = datetime.now()
-    now_str = now.strftime("%H:%M")
-    schedules = conn.execute(
-        "SELECT * FROM schedules WHERE day_of_week = ? ORDER BY start_time ASC",
-        (today_day,),
-    ).fetchall()
+    current_day = now.strftime("%A")
+    now_mins = now.hour * 60 + now.minute
+
+    conn = get_db()
+    schedules = conn.execute("SELECT * FROM schedules WHERE day_of_week = ?", (current_day,)).fetchall()
     conn.close()
 
-    for s in schedules:
-        if s["start_time"] <= now_str <= s["end_time"]:
-            start_dt = datetime.strptime(f"{now.strftime('%Y-%m-%d')} {s['start_time']}", "%Y-%m-%d %H:%M")
-            status = "LATE" if now > (start_dt + timedelta(minutes=15)) else "PRESENT"
-            return s["subject_code"], s["subject"], status
+    for sched in schedules:
+        start_mins = time_to_minutes(sched["start_time"])
+        end_mins = time_to_minutes(sched["end_time"])
+        if start_mins <= now_mins <= end_mins:
+            status = "LATE" if (now_mins - start_mins) > 15 else "PRESENT"
+            return sched["subject_code"], sched["subject"], status
 
     return None, None, None
 
 
 def auto_mark_ended_classes():
-    """Automatically logs ABSENT for any student who did not scan before a scheduled class ended."""
-    conn = get_db()
+    """Marks unregistered enrolled students as ABSENT once today's class end_time passes, updating daily CSVs."""
     now = datetime.now()
-    now_str = now.strftime("%H:%M")
-    today_day = now.strftime("%A")
-    today_date = now.strftime("%Y-%m-%d")
+    current_day = now.strftime("%A")
+    today_str = now.strftime("%Y-%m-%d")
+    now_mins = now.hour * 60 + now.minute
 
+    conn = get_db()
     students = conn.execute("SELECT student_id, full_name FROM students").fetchall()
     if not students:
         conn.close()
-        return 0
+        return
 
-    ended_schedules = conn.execute(
-        "SELECT * FROM schedules WHERE day_of_week = ? AND end_time < ? ORDER BY end_time ASC",
-        (today_day, now_str),
-    ).fetchall()
+    schedules = conn.execute("SELECT * FROM schedules WHERE day_of_week = ?", (current_day,)).fetchall()
+    changed_subjects = set()
 
-    newly_marked = 0
-    for s in ended_schedules:
-        end_dt = datetime.strptime(s["end_time"], "%H:%M")
-        end_time_12h = f"{end_dt.strftime('%I:%M %p')} (Auto)"
-
-        for stu in students:
-            exists = conn.execute(
-                "SELECT 1 FROM attendance_logs WHERE student_id = ? AND subject = ? AND date_str = ?",
-                (stu["student_id"], s["subject"], today_date),
-            ).fetchone()
-            if not exists:
-                try:
+    for sched in schedules:
+        end_mins = time_to_minutes(sched["end_time"])
+        if now_mins > end_mins:
+            for stu in students:
+                exists = conn.execute(
+                    "SELECT 1 FROM attendance_logs WHERE student_id = ? AND subject = ? AND date_str = ?",
+                    (stu["student_id"], sched["subject"], today_str),
+                ).fetchone()
+                if not exists:
                     conn.execute("""
                         INSERT INTO attendance_logs (student_id, full_name, subject_code, subject, status, date_str, time_str, proof_image)
                         VALUES (?, ?, ?, ?, 'ABSENT', ?, ?, '')
-                    """, (stu["student_id"], stu["full_name"], s["subject_code"], s["subject"], today_date, end_time_12h))
-                    newly_marked += 1
-                except sqlite3.IntegrityError:
-                    pass
+                    """, (stu["student_id"], stu["full_name"], sched["subject_code"], sched["subject"], today_str, sched["end_time"]))
+                    changed_subjects.add((sched["subject_code"], sched["subject"]))
 
-    if newly_marked > 0:
-        conn.commit()
+    for subj_code, subj_name in changed_subjects:
+        sync_daily_csv_both_ends(conn, today_str, subject_code=subj_code, subject_name=subj_name)
+
+    conn.commit()
     conn.close()
-    return newly_marked
