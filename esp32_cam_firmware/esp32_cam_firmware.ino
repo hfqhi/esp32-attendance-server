@@ -48,10 +48,12 @@ WiFiClient streamClient;
 bool sdAvailable = false;
 bool serverReachable = false;
 unsigned long lastSyncMs = 0;
+unsigned long lastReconcileMs = 0;
 unsigned long lastOfflineCheckMs = 0;
 unsigned long lastOfflineSaveMs = 0;
 
-const unsigned long SYNC_INTERVAL_MS = 3500;
+const unsigned long SYNC_INTERVAL_MS = 2500;
+const unsigned long RECONCILE_INTERVAL_MS = 15000;
 const unsigned long OFFLINE_CHECK_INTERVAL_MS = 1500;
 const unsigned long OFFLINE_SAVE_COOLDOWN_MS = 6000;
 const int MAX_OFFLINE_BUFFER_FILES = 25;
@@ -64,10 +66,10 @@ RTC_DATA_ATTR uint32_t bufferCounter = 1;
 // 2. TIMESTAMP & SD DIRECTORY HELPERS
 // ==========================================
 struct TimeStamps {
-  String dayName;    // Friday
-  String dateIso;    // 2026-11-20
-  String timeFile;   // 07-10-00PM
-  String timeHuman;  // 07:10:00 PM
+  String dayName;
+  String dateIso;
+  String timeFile;
+  String timeHuman;
   bool validNtp;
 };
 
@@ -136,7 +138,7 @@ String urlEncodeParam(const String& str) {
 }
 
 // ==========================================
-// 3. STRICT OFFLINE MOTION GATE (NO RANDOM SPAM)
+// 3. STRICT OFFLINE MOTION GATE
 // ==========================================
 bool hasSignificantOfflineMotion(camera_fb_t* fb) {
   if (!fb || fb->len < 2048) return false;
@@ -242,30 +244,16 @@ bool initMicroSD() {
   if (SD_MMC.cardType() == CARD_NONE) return false;
 
   ensureDir("/enrolled_faces");
+  ensureDir("/captured_proofs");
+  ensureDir("/attendance_logs");
   ensureDir("/offline_buffer");
-  Serial.println("[SD] Ready (Two-way sync enabled).");
+  Serial.println("[SD] Ready (/captured_proofs, /attendance_logs, /enrolled_faces).");
   return true;
 }
 
 // ==========================================
 // 5. OFFLINE BUFFERING & AUTOMATIC CLEANUP
 // ==========================================
-void clearAllOfflineBufferFiles() {
-  if (!sdAvailable) return;
-  File root = SD_MMC.open("/offline_buffer");
-  if (!root || !root.isDirectory()) return;
-
-  File f = root.openNextFile();
-  while (f) {
-    String p = String(f.path());
-    f.close();
-    SD_MMC.remove(p);
-    f = root.openNextFile();
-  }
-  root.close();
-  keepFlashGroundedOff();
-}
-
 void bufferFrameOnlyWhenOffline(camera_fb_t* fb, const TimeStamps& ts) {
   if (!sdAvailable || !fb) return;
   if (millis() - lastOfflineSaveMs < OFFLINE_SAVE_COOLDOWN_MS) return;
@@ -283,9 +271,9 @@ void bufferFrameOnlyWhenOffline(camera_fb_t* fb, const TimeStamps& ts) {
   File img = SD_MMC.open(fullPath, FILE_WRITE);
   if (img) {
     img.write(fb->buf, fb->len);
+    img.flush();
     img.close();
     lastOfflineSaveMs = millis();
-    Serial.printf("[OFFLINE-BUF] Buffered frame: %s\n", fullPath.c_str());
   }
   keepFlashGroundedOff();
 }
@@ -317,10 +305,8 @@ void flushAndDeleteOfflineBufferToServer() {
         http.end();
         free(buf);
 
-        // Automatically delete processed offline buffer file once server responds
         if (code == 200) {
           SD_MMC.remove(entryPath);
-          Serial.printf("[OFFLINE-BUF] Synced & auto-deleted: %s\n", entryPath.c_str());
         }
       } else {
         entry.close();
@@ -336,7 +322,7 @@ void flushAndDeleteOfflineBufferToServer() {
 }
 
 // ==========================================
-// 6. TWO-WAY LOCAL DB <-> MICROSD SYNCHRONIZATION
+// 6. FULL 1:1 LOCAL DB <-> MICROSD SYNCHRONIZATION
 // ==========================================
 void acknowledgeSyncTask(int taskId) {
   HTTPClient ack;
@@ -354,7 +340,7 @@ bool downloadFileFromServerToSd(const String& localRelPath, const String& sdPath
   HTTPClient dl;
   String url = String(SERVER_BASE) + "/api/esp32/download_sync_file?path=" + urlEncodeParam(localRelPath);
   dl.begin(url);
-  dl.setTimeout(4000);
+  dl.setTimeout(4500);
 
   int code = dl.GET();
   if (code == 200) {
@@ -364,11 +350,14 @@ bool downloadFileFromServerToSd(const String& localRelPath, const String& sdPath
     File out = SD_MMC.open(sdPath, FILE_WRITE);
     if (out) {
       dl.writeToStream(&out);
+      out.flush();
       out.close();
       dl.end();
       keepFlashGroundedOff();
-      Serial.printf("[SD-SYNC] Wrote %s\n", sdPath.c_str());
+      Serial.printf("[SD-SYNC] Saved: %s\n", sdPath.c_str());
       return true;
+    } else {
+      Serial.printf("[SD-SYNC] Failed to open for write: %s\n", sdPath.c_str());
     }
   } else if (code == 404) {
     dl.end();
@@ -404,7 +393,7 @@ void processPendingSdSyncTasks() {
         } else if (action == "DELETE_FILE") {
           if (SD_MMC.exists(sdPath)) {
             SD_MMC.remove(sdPath);
-            Serial.printf("[SD-SYNC] Deleted %s\n", sdPath.c_str());
+            Serial.printf("[SD-SYNC] Deleted: %s\n", sdPath.c_str());
           }
           ok = true;
         }
@@ -419,21 +408,27 @@ void processPendingSdSyncTasks() {
   keepFlashGroundedOff();
 }
 
-void syncInitialEnrolledPortraits() {
+void reconcileFullSdManifest() {
   if (!sdAvailable || WiFi.status() != WL_CONNECTED) return;
+
   HTTPClient http;
-  http.begin(String(SERVER_BASE) + "/api/esp32/enrolled_portraits");
-  http.setTimeout(3000);
+  http.begin(String(SERVER_BASE) + "/api/esp32/reconcile_manifest");
+  http.setTimeout(3500);
 
   if (http.GET() == 200) {
     JsonDocument doc;
     if (!deserializeJson(doc, http.getString())) {
-      JsonArray arr = doc["portraits"].as<JsonArray>();
-      for (JsonVariant v : arr) {
-        String fname = v.as<String>();
-        String sdPath = "/enrolled_faces/" + fname;
-        if (!SD_MMC.exists(sdPath)) {
-          downloadFileFromServerToSd("enrolled_faces/" + fname, sdPath);
+      JsonArray files = doc["files"].as<JsonArray>();
+      for (JsonObject f : files) {
+        String sdPath       = f["sd_path"] | "";
+        String localRelPath = f["local_rel_path"] | "";
+        bool overwrite      = f["overwrite"] | false;
+
+        if (sdPath.length() == 0 || localRelPath.length() == 0) continue;
+
+        if (overwrite || !SD_MMC.exists(sdPath)) {
+          downloadFileFromServerToSd(localRelPath, sdPath);
+          yield();
         }
       }
     }
@@ -462,7 +457,8 @@ bool sendHeartbeatToServer() {
 
   if (serverReachable && wasOffline) {
     flushAndDeleteOfflineBufferToServer();
-    syncInitialEnrolledPortraits();
+    processPendingSdSyncTasks();
+    reconcileFullSdManifest();
   }
   return serverReachable;
 }
@@ -511,7 +507,7 @@ void setup() {
   keepFlashGroundedOff();
   Serial.begin(115200);
   delay(200);
-  Serial.println("\n=== CPE-3B ESP32-CAM v2 Two-Way Sync Node ===");
+  Serial.println("\n=== CPE-3B ESP32-CAM v2 1:1 Sync Node ===");
 
   pinMode(ONBOARD_LED_PIN, OUTPUT);
   digitalWrite(ONBOARD_LED_PIN, HIGH);
@@ -546,8 +542,8 @@ void setup() {
 
     if (sendHeartbeatToServer()) {
       flushAndDeleteOfflineBufferToServer();
-      syncInitialEnrolledPortraits();
       processPendingSdSyncTasks();
+      reconcileFullSdManifest();
     }
   } else {
     Serial.println("\n[WIFI] Offline — standing by");
@@ -567,11 +563,17 @@ void loop() {
         processPendingSdSyncTasks();
       }
     }
+
+    if (millis() - lastReconcileMs >= RECONCILE_INTERVAL_MS) {
+      lastReconcileMs = millis();
+      if (serverReachable) {
+        reconcileFullSdManifest();
+      }
+    }
   } else {
     serverReachable = false;
   }
 
-  // Only buffer frames to /offline_buffer when Wi-Fi or the Flask server is unreachable
   if (!serverReachable && (millis() - lastOfflineCheckMs >= OFFLINE_CHECK_INTERVAL_MS)) {
     lastOfflineCheckMs = millis();
     camera_fb_t* fb = esp_camera_fb_get();
