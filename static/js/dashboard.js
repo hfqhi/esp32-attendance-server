@@ -154,10 +154,10 @@ function switchTab(tab) {
     const btn = document.getElementById(`tab-${t}`);
     if (t === tab) {
       btn.className =
-        "px-3.5 py-1.5 rounded-lg text-xs font-semibold transition bg-sky-500/15 text-sky-300 border border-sky-500/30";
+        "px-3.5 py-1.5 rounded-lg text-xs font-semibold transition bg-sky-500/15 text-sky-300 border border-sky-500/30 whitespace-nowrap";
     } else {
       btn.className =
-        "px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent";
+        "px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent whitespace-nowrap";
     }
   });
   loadDashboardData();
@@ -227,6 +227,27 @@ function renderRecentScans() {
     `<p class="text-slate-500 text-xs py-8 text-center">${targetDate ? `No scans recorded on ${formatHumanDate(targetDate)}.` : "No scans recorded yet."}</p>`;
 }
 
+function updateActiveClassHeader(label) {
+  const badge = document.getElementById("activeClassBadge");
+  const dot = document.getElementById("activeClassDot");
+  const text = document.getElementById("activeClassText");
+  if (!badge || !dot || !text) return;
+
+  const isOffHours = label.startsWith("No Active Class");
+  text.textContent = label;
+
+  if (isOffHours) {
+    badge.className =
+      "inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900/95 text-slate-300 border border-slate-800 whitespace-nowrap";
+    dot.className = "w-2 h-2 rounded-full bg-slate-500 shrink-0";
+  } else {
+    badge.className =
+      "inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-950/50 text-emerald-300 border border-emerald-700/60 whitespace-nowrap";
+    dot.className =
+      "w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0";
+  }
+}
+
 async function loadDashboardData() {
   const res = await fetch("/api/dashboard_data");
   const data = await res.json();
@@ -239,7 +260,7 @@ async function loadDashboardData() {
     return dDiff !== 0 ? dDiff : a.start_time.localeCompare(b.start_time);
   });
 
-  document.getElementById("activeClassBadge").textContent = data.active_subject;
+  updateActiveClassHeader(data.active_subject);
   const enrolledCountEl = document.getElementById("enrolledCountBadge");
   if (enrolledCountEl) {
     enrolledCountEl.textContent = `${cachedStudents.length} Student${cachedStudents.length === 1 ? "" : "s"}`;

@@ -18,12 +18,10 @@
       class="sticky top-0 z-30 bg-[#0c1220]/95 backdrop-blur-md border-b border-slate-800/90"
     >
       <div
-        class="max-w-7xl mx-auto px-6 py-3.5 grid grid-cols-1 lg:grid-cols-12 items-center gap-3"
+        class="max-w-7xl mx-auto px-6 py-3.5 flex flex-wrap items-center justify-between gap-3"
       >
         <!-- Brand Identity -->
-        <div
-          class="lg:col-span-4 flex items-center justify-center lg:justify-start gap-3"
-        >
+        <div class="flex items-center gap-3 shrink-0">
           <div
             class="w-8 h-8 rounded-lg bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center shadow-md shadow-sky-950/50 shrink-0"
           >
@@ -41,70 +39,74 @@
               />
             </svg>
           </div>
-          <div class="min-w-0">
-            <div class="flex items-center gap-2">
-              <h1
-                class="text-sm sm:text-base font-bold tracking-tight text-white truncate"
-              >
-                ES-SEE Attendance System
-              </h1>
-              <span
-                class="px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wider bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 shrink-0"
-                >CPE-3B</span
-              >
-            </div>
+          <div class="flex items-center gap-2">
+            <h1
+              class="text-sm sm:text-base font-bold tracking-tight text-white whitespace-nowrap"
+            >
+              ES-SEE Attendance System
+            </h1>
+            <span
+              class="px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wider bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 shrink-0"
+              >CPE-3B</span
+            >
           </div>
         </div>
 
-        <!-- Centered Navigation Pill Bar -->
-        <nav class="lg:col-span-5 flex items-center justify-center">
+        <!-- Navigation Pill Bar -->
+        <nav
+          class="flex items-center justify-center order-3 xl:order-2 w-full xl:w-auto"
+        >
           <div
             class="inline-flex items-center gap-1 p-1 rounded-xl bg-slate-900/90 border border-slate-800 shadow-inner"
           >
             <button
               onclick="switchTab('kiosk')"
               id="tab-kiosk"
-              class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition bg-sky-500/15 text-sky-300 border border-sky-500/30"
+              class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition bg-sky-500/15 text-sky-300 border border-sky-500/30 whitespace-nowrap"
             >
               Live Scanner
             </button>
             <button
               onclick="switchTab('logs')"
               id="tab-logs"
-              class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent"
+              class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent whitespace-nowrap"
             >
               Attendance Logs
             </button>
             <button
               onclick="switchTab('enroll')"
               id="tab-enroll"
-              class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent"
+              class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent whitespace-nowrap"
             >
               Enrolled Faces
             </button>
             <button
               onclick="switchTab('schedules')"
               id="tab-schedules"
-              class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent"
+              class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition text-slate-400 hover:text-slate-200 border border-transparent whitespace-nowrap"
             >
               Schedules
             </button>
           </div>
         </nav>
 
-        <!-- Live Class & Clock Telemetry -->
+        <!-- Live Class & Date-Time Telemetry -->
         <div
-          class="lg:col-span-3 flex items-center justify-center lg:justify-end gap-2"
+          class="flex flex-wrap items-center justify-end gap-2 order-2 xl:order-3"
         >
           <span
             id="activeClassBadge"
-            class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 text-sky-300 border border-slate-800 truncate max-w-[180px]"
+            class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900/95 text-sky-300 border border-slate-800 whitespace-nowrap"
           >
-            Loading...
+            <span
+              id="activeClassDot"
+              class="w-2 h-2 rounded-full bg-slate-500 shrink-0"
+            ></span>
+            <span id="activeClassText">Loading...</span>
           </span>
           <span
             id="liveClock"
-            class="text-xs font-mono text-slate-300 bg-slate-900 border border-slate-800 px-2.5 py-1.5 rounded-lg shrink-0"
+            class="text-xs font-mono text-slate-300 bg-slate-900/95 border border-slate-800 px-3 py-1.5 rounded-lg whitespace-nowrap shrink-0"
           ></span>
         </div>
       </div>
