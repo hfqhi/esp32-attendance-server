@@ -337,8 +337,7 @@ def dashboard_data():
     conn.close()
 
     active_code, active_subject, _ = get_active_schedule()
-    today_name = datetime.now().strftime("%A")
-    active_label = f"{active_code} • {active_subject}" if active_subject else f"No Active Class ({today_name})"
+    active_label = f"{active_code} • {active_subject}" if active_subject else "No Active Class"
 
     return jsonify({
         "students": students,
@@ -642,12 +641,11 @@ def verify_frame():
 
     subject_code, subject, att_status = get_active_schedule()
     if not subject:
-        today_name = datetime.now().strftime("%A")
         return jsonify({
             "status": "NO_CLASS",
             "student_id": verified_student["student_id"],
             "student_name": verified_student["full_name"],
-            "message": f"No Active Class ({today_name})"
+            "message": "No Active Class"
         })
 
     now_dt = datetime.now()
