@@ -36,6 +36,24 @@ esp32_node = {
     "last_seen": 0.0,
 }
 
+latest_scan_telemetry = {
+    "seq": 0,
+    "status": "IDLE",
+    "student_name": "",
+    "subject_code": "",
+    "attendance_status": "",
+    "timestamp": 0.0,
+}
+
+
+def publish_scan_telemetry(status, student_name="", subject_code="", attendance_status=""):
+    latest_scan_telemetry["seq"] += 1
+    latest_scan_telemetry["status"] = status
+    latest_scan_telemetry["student_name"] = student_name
+    latest_scan_telemetry["subject_code"] = subject_code
+    latest_scan_telemetry["attendance_status"] = attendance_status
+    latest_scan_telemetry["timestamp"] = time.time()
+
 
 def get_esp32_status():
     online = bool(esp32_node["ip"] and (time.time() - esp32_node["last_seen"] < 15.0))
@@ -64,6 +82,14 @@ def proof_rel_to_sd_path(proof_rel):
     return f"/captured_proofs/{clean_rel}"
 
 
+def build_lcd_class_status():
+    active_code, active_subject, att_status = get_active_schedule()
+    if not active_subject:
+        return "No Active Class"
+    code_label = (active_code or active_subject).strip()
+    return f"{code_label}: {att_status}"
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -74,7 +100,7 @@ def serve_proof_image(filename):
     return send_from_directory("captured_proofs", filename)
 
 
-# --- ESP32-CAM DEVICE & FULL 1:1 MICROSD SYNC ENDPOINTS ---
+# --- ESP32-CAM DEVICE, LCD/BUZZER TELEMETRY & 1:1 MICROSD SYNC ---
 @app.route("/api/esp32/register", methods=["POST"])
 def register_esp32():
     data = request.json or {}
@@ -90,6 +116,7 @@ def register_esp32():
         "success": True,
         "ip": ip_addr,
         "pending_sync": pending_count,
+        "class_status": build_lcd_class_status(),
         "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     })
 
@@ -171,7 +198,7 @@ def get_reconcile_manifest():
 
 @app.route("/api/esp32/sync_tasks", methods=["GET"])
 def get_esp32_sync_tasks():
-    """Returns pending local->SD file deletions, renames, captures, and CSV updates."""
+    """Returns pending local->SD tasks plus latest scan feedback for LCD & Buzzer."""
     esp32_node["last_seen"] = time.time()
     conn = get_db()
     rows = conn.execute("""
@@ -199,7 +226,11 @@ def get_esp32_sync_tasks():
             "local_rel_path": r["local_rel_path"],
         })
 
-    return jsonify({"tasks": tasks})
+    return jsonify({
+        "tasks": tasks,
+        "class_status": build_lcd_class_status(),
+        "last_scan": latest_scan_telemetry,
+    })
 
 
 @app.route("/api/esp32/download_sync_file", methods=["GET"])
@@ -636,11 +667,15 @@ def verify_frame():
 
     pending_response, verified_student, raw_frame = verify_instant_presence(raw_image, source=camera_source)
     if pending_response:
-        status_code = 400 if pending_response.get("status") == "ERROR" else 200
+        p_status = pending_response.get("status", "")
+        if p_status in ("UNKNOWN", "SPOOF"):
+            publish_scan_telemetry(p_status, "Unknown Face", "", p_status)
+        status_code = 400 if p_status == "ERROR" else 200
         return jsonify(pending_response), status_code
 
     subject_code, subject, att_status = get_active_schedule()
     if not subject:
+        publish_scan_telemetry("NO_CLASS", verified_student["full_name"], "", "NO_CLASS")
         return jsonify({
             "status": "NO_CLASS",
             "student_id": verified_student["student_id"],
@@ -661,6 +696,12 @@ def verify_frame():
 
     if existing:
         conn.close()
+        publish_scan_telemetry(
+            "ALREADY_LOGGED",
+            verified_student["full_name"],
+            display_subj,
+            att_status,
+        )
         return jsonify({
             "status": "ALREADY_LOGGED",
             "student_id": verified_student["student_id"],
@@ -689,6 +730,13 @@ def verify_frame():
 
     conn.commit()
     conn.close()
+
+    publish_scan_telemetry(
+        "LOGGED",
+        verified_student["full_name"],
+        display_subj,
+        att_status,
+    )
 
     return jsonify({
         "status": "LOGGED",
