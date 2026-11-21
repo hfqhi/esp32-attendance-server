@@ -4,7 +4,6 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
-#include <LiquidCrystal_I2C.h>
 #include "FS.h"
 #include "SD_MMC.h"
 #include "time.h"
@@ -52,11 +51,17 @@ const int   DAYLIGHT_OFF  = 0;
 #define BUZZER_ACTIVE_LEVEL  LOW  // MM-FMD Low-Level Trigger: LOW = Beep
 #define BUZZER_IDLE_LEVEL    HIGH // MM-FMD Low-Level Trigger: HIGH = Silent
 
+// PCF8574 I2C Backpack Bit Mapping (Standard HD44780 Backpack)
+#define PCF_RS 0x01
+#define PCF_RW 0x02
+#define PCF_EN 0x04
+#define PCF_BL 0x08
+
 WebServer camHttpServer(80);
 WiFiServer streamServer(81);
 WiFiClient streamClient;
 
-LiquidCrystal_I2C* lcd = nullptr;
+uint8_t lcdI2CAddr = 0;
 bool lcdAvailable = false;
 bool buzzerAvailable = false;
 bool sdAvailable = false;
@@ -96,7 +101,146 @@ size_t prevFrameLen = 0;
 RTC_DATA_ATTR uint32_t bufferCounter = 1;
 
 // ==========================================
-// 3. NON-BLOCKING MM-FMD BUZZER & 16x2 I2C LCD
+// 3. PIN-LOCKED DIRECT PCF8574 16x2 LCD DRIVER
+// ==========================================
+void pcfWriteExpander(uint8_t data) {
+  if (lcdI2CAddr == 0) return;
+  Wire.beginTransmission(lcdI2CAddr);
+  Wire.write(data | PCF_BL);
+  Wire.endTransmission();
+}
+
+void pcfPulseEnable(uint8_t data) {
+  pcfWriteExpander(data | PCF_EN);
+  delayMicroseconds(2);
+  pcfWriteExpander(data & ~PCF_EN);
+  delayMicroseconds(50);
+}
+
+void pcfWrite4Bits(uint8_t nibbleWithCtrl) {
+  pcfWriteExpander(nibbleWithCtrl);
+  pcfPulseEnable(nibbleWithCtrl);
+}
+
+void lcdSendByte(uint8_t value, uint8_t mode) {
+  uint8_t highNib = (value & 0xF0) | mode;
+  uint8_t lowNib  = ((value << 4) & 0xF0) | mode;
+  pcfWrite4Bits(highNib);
+  pcfWrite4Bits(lowNib);
+}
+
+void lcdCommand(uint8_t cmd) {
+  lcdSendByte(cmd, 0x00);
+}
+
+void lcdWriteChar(uint8_t ch) {
+  lcdSendByte(ch, PCF_RS);
+}
+
+void lcdSetCursor(uint8_t col, uint8_t row) {
+  uint8_t rowOffset = (row == 0) ? 0x00 : 0x40;
+  lcdCommand(0x80 | (col + rowOffset));
+}
+
+void lcdBeginHardware(uint8_t addr) {
+  lcdI2CAddr = addr;
+  delay(50);
+  pcfWriteExpander(0x00);
+  delay(20);
+
+  // HD44780 4-bit initialization handshake
+  pcfWrite4Bits(0x30);
+  delay(5);
+  pcfWrite4Bits(0x30);
+  delayMicroseconds(200);
+  pcfWrite4Bits(0x30);
+  delayMicroseconds(200);
+  pcfWrite4Bits(0x20);
+  delayMicroseconds(200);
+
+  lcdCommand(0x28); // 4-bit bus, 2 lines, 5x8 font
+  lcdCommand(0x08); // Display OFF
+  lcdCommand(0x01); // Clear display
+  delay(3);
+  lcdCommand(0x06); // Entry mode: increment cursor, no shift
+  lcdCommand(0x0C); // Display ON, cursor OFF, blink OFF
+}
+
+String fitLcd16(const String& text) {
+  String out = text;
+  if (out.length() > 16) {
+    out = out.substring(0, 16);
+  }
+  while (out.length() < 16) {
+    out += ' ';
+  }
+  return out;
+}
+
+void writeLcdLines(const String& row1, const String& row2) {
+  if (!lcdAvailable || lcdI2CAddr == 0) return;
+  String r1 = fitLcd16(row1);
+  String r2 = fitLcd16(row2);
+  if (r1 != lcdLastRow1) {
+    lcdSetCursor(0, 0);
+    for (int i = 0; i < 16; i++) {
+      lcdWriteChar((uint8_t)r1[i]);
+    }
+    lcdLastRow1 = r1;
+  }
+  if (r2 != lcdLastRow2) {
+    lcdSetCursor(0, 1);
+    for (int i = 0; i < 16; i++) {
+      lcdWriteChar((uint8_t)r2[i]);
+    }
+    lcdLastRow2 = r2;
+  }
+}
+
+uint8_t scanI2CBusOnPins(int sdaPin, int sclPin) {
+  Wire.end();
+  delay(10);
+  Wire.begin(sdaPin, sclPin);
+  Wire.setClock(50000);
+  delay(20);
+
+  for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      return addr;
+    }
+  }
+  return 0;
+}
+
+bool initI2CLcd() {
+  int usedSda = LCD_SDA_PIN;
+  int usedScl = LCD_SCL_PIN;
+  uint8_t detectedAddr = scanI2CBusOnPins(LCD_SDA_PIN, LCD_SCL_PIN);
+
+  // Automatic fallback if SDA/SCL wires were swapped
+  if (detectedAddr == 0) {
+    detectedAddr = scanI2CBusOnPins(LCD_SCL_PIN, LCD_SDA_PIN);
+    if (detectedAddr != 0) {
+      usedSda = LCD_SCL_PIN;
+      usedScl = LCD_SDA_PIN;
+    }
+  }
+
+  if (detectedAddr == 0) {
+    Serial.println("[LCD] Not detected on I2C (SDA=13, SCL=3) — continuing headless.");
+    return false;
+  }
+
+  lcdBeginHardware(detectedAddr);
+  lcdAvailable = true;
+  writeLcdLines("ES-SEE v2 Node", "Connecting...");
+  Serial.printf("[LCD] Initialized 16x2 at 0x%02X (SDA=%d, SCL=%d)\n", detectedAddr, usedSda, usedScl);
+  return true;
+}
+
+// ==========================================
+// 4. NON-BLOCKING MM-FMD LOW-LEVEL BUZZER
 // ==========================================
 bool initBuzzer() {
   // Release UART0 TX so GPIO 1 (U0T) can be probed and driven cleanly
@@ -104,7 +248,6 @@ bool initBuzzer() {
   Serial.end();
   delay(20);
 
-  // Probe line load using internal pull-up & pull-down resistors
   pinMode(BUZZER_PIN, INPUT_PULLUP);
   delayMicroseconds(500);
   int highState = digitalRead(BUZZER_PIN);
@@ -113,12 +256,10 @@ bool initBuzzer() {
   delayMicroseconds(500);
   int lowState = digitalRead(BUZZER_PIN);
 
-  // Re-open Serial briefly to report hardware detection result
-  Serial.begin(115200);
+  // Re-open TX-only Serial (RX = -1 keeps GPIO 3 dedicated to I2C SCL)
+  Serial.begin(115200, SERIAL_8N1, -1, 1);
   delay(20);
 
-  // Floating pin reads HIGH with pullup and LOW with pulldown;
-  // Connected MM-FMD module loads the line (LOW on pullup or HIGH on pulldown)
   if (highState == LOW || lowState == HIGH) {
     buzzerAvailable = true;
     Serial.println("[BUZZER] MM-FMD Low-Level Buzzer detected on GPIO 1 (U0T).");
@@ -170,33 +311,6 @@ void serviceBuzzer() {
   }
 }
 
-String fitLcd16(const String& text) {
-  String out = text;
-  if (out.length() > 16) {
-    out = out.substring(0, 16);
-  }
-  while (out.length() < 16) {
-    out += ' ';
-  }
-  return out;
-}
-
-void writeLcdLines(const String& row1, const String& row2) {
-  if (!lcdAvailable || lcd == nullptr) return;
-  String r1 = fitLcd16(row1);
-  String r2 = fitLcd16(row2);
-  if (r1 != lcdLastRow1) {
-    lcd->setCursor(0, 0);
-    lcd->print(r1);
-    lcdLastRow1 = r1;
-  }
-  if (r2 != lcdLastRow2) {
-    lcd->setCursor(0, 1);
-    lcd->print(r2);
-    lcdLastRow2 = r2;
-  }
-}
-
 void showLcdScanAlert(const String& row1, const String& row2, unsigned long holdMs = 4000) {
   lcdAlertActive = true;
   lcdAlertUntilMs = millis() + holdMs;
@@ -227,38 +341,8 @@ void handleScanFeedback(const String& status, const String& studentName, const S
   }
 }
 
-bool probeI2CAddress(uint8_t addr) {
-  Wire.beginTransmission(addr);
-  return (Wire.endTransmission() == 0);
-}
-
-bool initI2CLcd() {
-  Wire.begin(LCD_SDA_PIN, LCD_SCL_PIN);
-  Wire.setClock(100000);
-
-  uint8_t detectedAddr = 0;
-  if (probeI2CAddress(0x27)) {
-    detectedAddr = 0x27;
-  } else if (probeI2CAddress(0x3F)) {
-    detectedAddr = 0x3F;
-  }
-
-  if (detectedAddr == 0) {
-    Serial.println("[LCD] Not detected on I2C (0x27/0x3F) — continuing headless.");
-    return false;
-  }
-
-  lcd = new LiquidCrystal_I2C(detectedAddr, 16, 2);
-  lcd->init();
-  lcd->backlight();
-  lcdAvailable = true;
-  writeLcdLines("ES-SEE v2 Node", "Connecting...");
-  Serial.printf("[LCD] Initialized 16x2 at 0x%02X\n", detectedAddr);
-  return true;
-}
-
 // ==========================================
-// 4. CLOCK, TIMESTAMP & SD DIRECTORY HELPERS
+// 5. CLOCK, TIMESTAMP & SD DIRECTORY HELPERS
 // ==========================================
 void keepFlashGroundedOff() {
   pinMode(FLASH_LED_PIN, OUTPUT);
@@ -343,7 +427,7 @@ String urlEncodeParam(const String& str) {
 }
 
 // ==========================================
-// 5. STRICT OFFLINE MOTION GATE
+// 6. STRICT OFFLINE MOTION GATE
 // ==========================================
 bool hasSignificantOfflineMotion(camera_fb_t* fb) {
   if (!fb || fb->len < 2048) return false;
@@ -374,7 +458,7 @@ bool hasSignificantOfflineMotion(camera_fb_t* fb) {
 }
 
 // ==========================================
-// 6. CAMERA & MICROSD INITIALIZATION
+// 7. CAMERA & MICROSD INITIALIZATION
 // ==========================================
 bool initCamera() {
   camera_config_t config;
@@ -467,7 +551,7 @@ bool initMicroSD() {
 }
 
 // ==========================================
-// 7. OFFLINE BUFFERING & AUTOMATIC CLEANUP
+// 8. OFFLINE BUFFERING & AUTOMATIC CLEANUP
 // ==========================================
 void bufferFrameOnlyWhenOffline(camera_fb_t* fb, const String& dateIso, const String& timeFile) {
   if (!sdAvailable || !fb) return;
@@ -539,7 +623,7 @@ void flushAndDeleteOfflineBufferToServer() {
 }
 
 // ==========================================
-// 8. FULL 1:1 MICROSD SYNC & SCAN TELEMETRY
+// 9. FULL 1:1 MICROSD SYNC & SCAN TELEMETRY
 // ==========================================
 void acknowledgeSyncTask(int taskId) {
   HTTPClient ack;
@@ -709,7 +793,7 @@ bool sendHeartbeatToServer() {
 }
 
 // ==========================================
-// 9. HIGH-SPEED WEB DASHBOARD STREAMING ENDPOINTS
+// 10. HIGH-SPEED WEB DASHBOARD STREAMING ENDPOINTS
 // ==========================================
 void handleSingleCapture() {
   camera_fb_t* fb = esp_camera_fb_get();
@@ -746,14 +830,15 @@ void serviceMjpegStream() {
 }
 
 // ==========================================
-// 10. SETUP & MAIN LOOP
+// 11. SETUP & MAIN LOOP
 // ==========================================
 void setup() {
   keepFlashGroundedOff();
 
-  Serial.begin(115200);
+  // TX-only on GPIO 1 (RX = -1) so UART0 never hijacks GPIO 3 (I2C SCL)
+  Serial.begin(115200, SERIAL_8N1, -1, 1);
   delay(200);
-  Serial.println("\n=== CPE-3B ESP32-CAM v2 (MB102 + I2C LCD + MM-FMD Buzzer) ===");
+  Serial.println("\n=== CPE-3B ESP32-CAM v2 (MB102 + Direct I2C LCD + MM-FMD Buzzer) ===");
 
   pinMode(ONBOARD_LED_PIN, OUTPUT);
   digitalWrite(ONBOARD_LED_PIN, HIGH);
@@ -761,7 +846,7 @@ void setup() {
   // Initialize camera first so DMA/PSRAM gets clean, unfragmented heap
   bool camOk = initCamera();
 
-  // Probe I2C LCD safely (continues headless if unplugged)
+  // Probe & initialize PCF8574 16x2 LCD directly on locked pins (13, 3)
   initI2CLcd();
 
   if (!camOk) {
